@@ -89,8 +89,11 @@ def _validate_history(history: Sequence[OptionSnapshot]) -> None:
                 raise OptionsIntelligenceError("mixed option token history")
             if snapshot.exchange_at < previous.exchange_at:
                 raise OptionsIntelligenceError("option history not ordered")
-            if snapshot.sequence <= previous.sequence:
-                raise OptionsIntelligenceError("option sequence not increasing")
+            if (
+                snapshot.exchange_at == previous.exchange_at
+                and snapshot.sequence <= previous.sequence
+            ):
+                raise OptionsIntelligenceError("duplicate option sequence")
             if (
                 snapshot.expiry != previous.expiry
                 or snapshot.strike != previous.strike

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class StorageError(Exception):
@@ -111,6 +111,19 @@ class SQLiteStore:
                     best_ask_quantity INTEGER NOT NULL CHECK(best_ask_quantity >= 0),
                     depth_buy_quantity INTEGER NOT NULL CHECK(depth_buy_quantity >= 0),
                     depth_sell_quantity INTEGER NOT NULL CHECK(depth_sell_quantity >= 0),
+                    PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
+                );
+
+                CREATE TABLE IF NOT EXISTS breadth_snapshots (
+                    exchange TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    industry TEXT NOT NULL,
+                    exchange_ts_utc TEXT NOT NULL,
+                    received_ts_utc TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence >= 0),
+                    ltp REAL NOT NULL CHECK(ltp > 0),
+                    previous_close REAL NOT NULL CHECK(previous_close > 0),
                     PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
                 );
                 """
@@ -392,6 +405,58 @@ class SQLiteStore:
             for row in rows
         )
 
+    def load_breadth_snapshots(
+        self,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple["BreadthMarketSnapshot", ...]:
+        """Load stored constituent quote snapshots in deterministic order."""
+
+        clauses: list[str] = []
+        params: list[object] = []
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("breadth start timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("breadth end timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("breadth load range invalid")
+
+        query = (
+            "SELECT symbol, industry, token, exchange_ts_utc, received_ts_utc, "
+            "sequence, ltp, previous_close FROM breadth_snapshots"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY exchange_ts_utc ASC, symbol ASC, sequence ASC"
+
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite breadth snapshot read failed") from None
+
+        from intrader.breadth import BreadthMarketSnapshot
+
+        return tuple(
+            BreadthMarketSnapshot(
+                symbol=str(row[0]),
+                industry=str(row[1]),
+                token=str(row[2]),
+                exchange_at=datetime.fromisoformat(row[3]),
+                received_at=datetime.fromisoformat(row[4]),
+                sequence=int(row[5]),
+                current_price=Decimal(str(row[6])),
+                previous_close=Decimal(str(row[7])),
+            )
+            for row in rows
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -558,6 +623,42 @@ class SQLiteStore:
             raise StorageError("SQLite future snapshot write failed") from None
         return cursor.rowcount == 1
 
+    def store_breadth_tick(self, member, tick: MarketTick) -> bool:
+        instrument = member.instrument
+        if (
+            instrument.exchange != "NSE"
+            or tick.exchange != "NSE"
+            or tick.token != instrument.token
+            or tick.mode != 2
+            or tick.previous_close is None
+            or tick.previous_close <= 0
+        ):
+            raise StorageError("breadth snapshot invalid")
+        try:
+            with self._connection:
+                cursor = self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO breadth_snapshots
+                        (exchange, token, symbol, industry, exchange_ts_utc,
+                         received_ts_utc, sequence, ltp, previous_close)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tick.exchange,
+                        tick.token,
+                        member.symbol,
+                        member.industry,
+                        _utc_iso(tick.exchange_at),
+                        _utc_iso(tick.received_at),
+                        tick.sequence,
+                        float(tick.last_price),
+                        float(tick.previous_close),
+                    ),
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite breadth snapshot write failed") from None
+        return cursor.rowcount == 1
+
     def store_option_tick(self, instrument: Instrument, tick: MarketTick) -> bool:
         if (
             instrument.exchange != "NFO"
@@ -610,7 +711,7 @@ class SQLiteStore:
     def count(self, table: str) -> int:
         if table not in {
             "candles", "oi_observations", "option_snapshots",
-            "index_snapshots", "future_snapshots",
+            "index_snapshots", "future_snapshots", "breadth_snapshots",
         }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
@@ -634,9 +735,14 @@ class OptionSnapshotSink:
 
 
 class MarketSnapshotSink:
-    """Persist the complete resolved Phase 2 market snapshot set."""
+    """Persist core Phase 2 streams plus optional breadth quotes."""
 
-    def __init__(self, store: SQLiteStore, instruments: NiftyInstruments) -> None:
+    def __init__(
+        self,
+        store: SQLiteStore,
+        instruments: NiftyInstruments,
+        breadth_members=(),
+    ) -> None:
         self._store = store
         self._spot = ("NSE", instruments.spot.token)
         self._vix = ("NSE", instruments.vix.token)
@@ -650,6 +756,10 @@ class MarketSnapshotSink:
             ("NFO", instrument.token): instrument
             for instrument in (*instruments.calls, *instruments.puts)
         }
+        self._breadth = {
+            ("NSE", member.instrument.token): member
+            for member in breadth_members
+        }
 
     def __call__(self, tick: MarketTick) -> None:
         key = (tick.exchange, tick.token)
@@ -662,3 +772,11 @@ class MarketSnapshotSink:
         option = self._options.get(key)
         if option is not None:
             self._store.store_option_tick(option, tick)
+            return
+        breadth_member = self._breadth.get(key)
+        if breadth_member is not None:
+            try:
+                self._store.store_breadth_tick(breadth_member, tick)
+            except StorageError:
+                # Breadth is optional confirmation and cannot break core readiness.
+                return

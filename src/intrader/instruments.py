@@ -60,6 +60,57 @@ def _parse_relevant_row(row: dict) -> Instrument:
     return Instrument(token, symbol, name, kind, exchange, expiry, strike, lot_size)
 
 
+def fetch_full_instrument_master(transport: MasterTransport) -> list[Instrument]:
+    """Fetch the official Angel One master without filtering instrument names."""
+
+    try:
+        raw = transport.get_json(MASTER_URL, timeout=30)
+    except Exception:
+        raise InstrumentError("instrument master unavailable") from None
+    if not isinstance(raw, list):
+        raise InstrumentError("instrument master invalid")
+
+    instruments: list[Instrument] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        try:
+            instruments.append(_parse_relevant_row(row))
+        except InstrumentError:
+            continue
+    if not instruments:
+        raise InstrumentError("instrument master invalid")
+    return instruments
+
+
+def resolve_nse_equities(
+    master: Sequence[Instrument],
+    symbols: Sequence[str],
+) -> dict[str, Instrument]:
+    """Resolve exact NSE -EQ instruments for a requested symbol set."""
+
+    requested = tuple(symbol.strip().upper() for symbol in symbols)
+    if not requested or any(not symbol for symbol in requested):
+        raise InstrumentError("equity symbols invalid")
+    if len(set(requested)) != len(requested):
+        raise InstrumentError("duplicate equity symbols")
+
+    resolved: dict[str, Instrument] = {}
+    for symbol in requested:
+        exact_symbol = f"{symbol}-EQ"
+        matches = [
+            item
+            for item in master
+            if item.exchange == "NSE"
+            and item.symbol.upper() == exact_symbol
+            and item.expiry is None
+        ]
+        if len(matches) != 1:
+            raise InstrumentError(f"NSE equity unavailable: {symbol}")
+        resolved[symbol] = matches[0]
+    return resolved
+
+
 def fetch_instrument_master(transport: MasterTransport) -> list[Instrument]:
     """Fetch and parse only NIFTY and India VIX rows from the official master."""
 

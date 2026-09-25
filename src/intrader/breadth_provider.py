@@ -71,7 +71,7 @@ def parse_nifty50_constituents(csv_text: str) -> tuple[NiftyConstituent, ...]:
     if not isinstance(csv_text, str) or not csv_text.strip():
         raise BreadthProviderError("NIFTY constituent list invalid")
     reader = csv.DictReader(StringIO(csv_text.lstrip("\ufeff")))
-    required = {"Company Name", "Industry", "Symbol"}
+    required = {"Company Name", "Industry", "Symbol", "Series"}
     if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
         raise BreadthProviderError("NIFTY constituent columns invalid")
 
@@ -81,7 +81,14 @@ def parse_nifty50_constituents(csv_text: str) -> tuple[NiftyConstituent, ...]:
         company = (row.get("Company Name") or "").strip()
         industry = (row.get("Industry") or "").strip()
         symbol = (row.get("Symbol") or "").strip().upper()
-        if not company or not industry or not symbol or symbol in seen:
+        series = (row.get("Series") or "").strip().upper()
+        if (
+            not company
+            or not industry
+            or not symbol
+            or series != "EQ"
+            or symbol in seen
+        ):
             raise BreadthProviderError("NIFTY constituent row invalid")
         seen.add(symbol)
         constituents.append(NiftyConstituent(company, industry, symbol))

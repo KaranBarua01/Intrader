@@ -123,7 +123,7 @@ class LiveFeed:
     def run_probe(self, duration_seconds: float) -> HealthSnapshot:
         """Observe feed health for a bounded period without emitting ticks."""
 
-        if not 0 < duration_seconds <= 120:
+        if not 0 < duration_seconds <= 3600:
             raise ValueError("probe duration out of range")
         result: list[HealthSnapshot] = []
 

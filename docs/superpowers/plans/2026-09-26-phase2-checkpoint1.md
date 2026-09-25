@@ -1,6 +1,6 @@
 # Intrader Phase 2 Checkpoint 1 — Price Structure Engine
 
-**Status:** IN PROGRESS.
+**Status:** OFFLINE COMPLETE. Price Structure, SQLite loading, pipeline integration, and read-only CLI are implemented. Targeted verifier: 19/19 tests passed. Real market-data verification remains pending until stored live-session data is available.
 
 **Goal:** Convert stored one-minute NIFTY spot and nearest-future candles into deterministic price-structure metrics. This checkpoint produces measurements only; it does not emit BUY/SELL instructions or a final direction score.
 

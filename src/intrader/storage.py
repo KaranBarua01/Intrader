@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 import sqlite3
 from typing import TYPE_CHECKING
@@ -134,6 +136,62 @@ class SQLiteStore:
                 )
             )
         return rows
+
+    def load_candles(
+        self,
+        exchange: str,
+        token: str,
+        interval: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple["Candle", ...]:
+        """Load stored candles in ascending UTC timestamp order."""
+
+        clauses = [
+            "exchange = ?",
+            "token = ?",
+            "interval = ?",
+        ]
+        params: list[object] = [exchange, token, interval]
+
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("candle start timestamp must be timezone aware")
+            clauses.append("ts_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("candle end timestamp must be timezone aware")
+            clauses.append("ts_utc <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("candle load range invalid")
+
+        query = (
+            "SELECT ts_utc, open, high, low, close, volume "
+            "FROM candles WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY ts_utc ASC"
+        )
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite candle read failed") from None
+
+        from intrader.historical import Candle
+
+        return tuple(
+            Candle(
+                datetime.fromisoformat(row[0]),
+                Decimal(str(row[1])),
+                Decimal(str(row[2])),
+                Decimal(str(row[3])),
+                Decimal(str(row[4])),
+                int(row[5]),
+            )
+            for row in rows
+        )
 
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]

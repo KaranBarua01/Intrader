@@ -94,3 +94,37 @@ Running the same backfill again is safe: candle and OI primary keys update exist
 `check-live-feed` now also writes resolved option SNAP_QUOTE observations to the same SQLite database. A database write failure forces the feed to `NO TRADE`.
 
 Checkpoint 4 code is implemented and offline-tested. The remaining checkpoint gate is one successful real historical backfill on the Windows/Python 3.11 machine.
+
+
+## Phase 1 Checkpoint 5 — 30-minute session warm-up
+
+Preview a configured session without making network requests:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader session-plan 2026-09-28
+```
+
+With the default 12:00 IST live start, the plan is:
+
+- 09:15 IST market-open history baseline
+- 11:30 IST warm-up start
+- 12:00 IST readiness gate / selected live start
+- 12:30 IST configured live-window end
+
+Start the preparation engine at the warm-up start:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader prepare-session YYYY-MM-DD
+```
+
+The preparation engine:
+
+1. backfills core NIFTY/VIX/future candles and future OI;
+2. collects live ATM +/-4 option LTP/OI/volume during warm-up;
+3. performs a final incremental candle/OI backfill at the selected start;
+4. validates every critical live instrument;
+5. returns `READY` only when the complete feed is fresh; otherwise it returns `NO TRADE`.
+
+For data-integrity safety, starting more than 2 minutes after the configured warm-up start returns `NO TRADE: MISSED_WARMUP`, because the missing live option history cannot be reconstructed reliably.
+
+Checkpoint 5 is offline-tested. Final completion requires one real market-hours warm-up on the Windows/Python 3.11 machine.

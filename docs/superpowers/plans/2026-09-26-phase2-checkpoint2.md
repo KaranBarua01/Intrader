@@ -1,6 +1,6 @@
 # Intrader Phase 2 Checkpoint 2 — Options Intelligence
 
-**Status:** IN PROGRESS.
+**Status:** IMPLEMENTATION COMPLETE. Engine, SQLite reads, stored-session pipeline, CLI, and tests are committed. Branch-level pytest verification remains pending because connector-originated commits are not starting GitHub Actions in this repository.
 
 **Goal:** Convert the stored ATM +/-4 NIFTY option snapshots into deterministic chain measurements without producing a final market-direction verdict.
 

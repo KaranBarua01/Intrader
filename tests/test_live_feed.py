@@ -140,3 +140,46 @@ def test_cli_live_probe_reports_no_trade_without_exposing_tokens(monkeypatch, ca
     assert "LIVE FEED: NO TRADE" in output
     assert "MISSING_TICKS" in output
     assert "dummy-" not in output
+
+
+
+def test_tick_sink_failure_closes_socket_and_forces_no_trade() -> None:
+    bundle = _bundle()
+    health = FeedHealth(bundle, 5, 8)
+    sockets: list[FakeSocket] = []
+
+    class TickSocket(FakeSocket):
+        def run_forever(self, **kwargs) -> None:
+            self.run_options = kwargs
+            self.on_open(self)
+            import struct
+
+            packet = bytearray(139)
+            packet[0] = 3
+            packet[1] = 2
+            packet[2:27] = b"call".ljust(25, b"\x00")
+            struct.pack_into("<q", packet, 27, 1)
+            struct.pack_into("<q", packet, 35, int(datetime.now(timezone.utc).timestamp() * 1000))
+            struct.pack_into("<q", packet, 43, 12550)
+            struct.pack_into("<q", packet, 131, 1000)
+            self.on_data(self, bytes(packet), 2, True)
+
+    def factory(**kwargs):
+        socket = TickSocket(**kwargs)
+        sockets.append(socket)
+        return socket
+
+    def broken_sink(_tick) -> None:
+        raise RuntimeError("disk unavailable")
+
+    feed = LiveFeed(
+        lambda: _session("sink"),
+        bundle,
+        health,
+        socket_factory=factory,
+        tick_sink=broken_sink,
+    )
+    feed.run(max_attempts=1)
+
+    assert sockets[0].closed
+    assert health.snapshot(datetime.now(timezone.utc)).state == "NO TRADE"

@@ -193,6 +193,66 @@ class SQLiteStore:
             for row in rows
         )
 
+    def load_option_snapshots(
+        self,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        expiry: str | None = None,
+    ) -> tuple["OptionSnapshot", ...]:
+        """Load stored option snapshots in deterministic time/token order."""
+
+        clauses: list[str] = []
+        params: list[object] = []
+
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("option start timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("option end timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("option load range invalid")
+        if expiry is not None:
+            clauses.append("expiry = ?")
+            params.append(expiry)
+
+        query = (
+            "SELECT token, exchange_ts_utc, received_ts_utc, sequence, "
+            "expiry, strike, option_type, ltp, open_interest, volume "
+            "FROM option_snapshots"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY exchange_ts_utc ASC, token ASC, sequence ASC"
+
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite option snapshot read failed") from None
+
+        from intrader.options_intelligence import OptionSnapshot
+
+        return tuple(
+            OptionSnapshot(
+                token=str(row[0]),
+                exchange_at=datetime.fromisoformat(row[1]),
+                received_at=datetime.fromisoformat(row[2]),
+                sequence=int(row[3]),
+                expiry=datetime.fromisoformat(row[4]).date(),
+                strike=Decimal(str(row[5])),
+                option_type=str(row[6]),
+                ltp=Decimal(str(row[7])),
+                open_interest=int(row[8]),
+                volume=int(row[9]),
+            )
+            for row in rows
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:

@@ -1,6 +1,6 @@
 """Intrader command-line entry point."""
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 import getpass
 import sys
@@ -16,6 +16,13 @@ from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
 from intrader.live_feed import LiveFeed
 from intrader.secrets import REQUIRED_SECRET_NAMES
+from intrader.session import (
+    SessionCoordinator,
+    SessionScheduleError,
+    SessionState,
+    WarmupRunner,
+    build_session_schedule,
+)
 from intrader.storage import OptionSnapshotSink, SQLiteStore
 
 
@@ -27,6 +34,18 @@ def _parse_india_datetime(day: str, clock: str) -> datetime:
     return datetime.strptime(f"{day} {clock}", "%Y-%m-%d %H:%M").replace(
         tzinfo=INDIA_TIME
     )
+
+
+def _now_india() -> datetime:
+    return datetime.now(INDIA_TIME)
+
+
+def _print_schedule(schedule) -> None:
+    print("SESSION PLAN")
+    print(f"Market open: {schedule.market_open:%Y-%m-%d %H:%M %Z}")
+    print(f"Warm-up start: {schedule.warmup_start:%Y-%m-%d %H:%M %Z}")
+    print(f"Live start: {schedule.live_start:%Y-%m-%d %H:%M %Z}")
+    print(f"Live end: {schedule.live_end:%Y-%m-%d %H:%M %Z}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,6 +86,19 @@ def main(argv: list[str] | None = None) -> int:
             print("STORAGE UNAVAILABLE")
             return 1
         print("STORAGE READY")
+        return 0
+
+    if argv and argv[0] == "session-plan":
+        if len(argv) != 2:
+            print("Usage: python -m intrader session-plan YYYY-MM-DD")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            schedule = build_session_schedule(load_config(), session_date)
+        except (ValueError, SessionScheduleError):
+            print("SESSION PLAN UNAVAILABLE")
+            return 1
+        _print_schedule(schedule)
         return 0
 
     if argv == ["check-market-access"]:
@@ -165,11 +197,120 @@ def main(argv: list[str] | None = None) -> int:
         print(f"OI rows processed: {report.oi_rows}")
         return 0
 
+    if argv and argv[0] == "prepare-session":
+        if len(argv) != 2:
+            print("Usage: python -m intrader prepare-session YYYY-MM-DD")
+            return 2
+        db_store: SQLiteStore | None = None
+        try:
+            config = load_config()
+            session_date = date.fromisoformat(argv[1])
+            schedule = build_session_schedule(config, session_date)
+            now = _now_india()
+            precheck = SessionCoordinator(
+                schedule,
+                warmup_start_grace_seconds=config.warmup_start_grace_seconds,
+            )
+            state = precheck.begin(now)
+            if state == SessionState.CONFIGURED:
+                print("SESSION: CONFIGURED")
+                print("Reason: WARMUP_NOT_STARTED")
+                _print_schedule(schedule)
+                return 0
+            if state in {SessionState.NO_TRADE, SessionState.ENDED}:
+                print(f"SESSION: {state.value}")
+                if precheck.reasons:
+                    print(f"Reason: {', '.join(precheck.reasons)}")
+                return 1
+
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            initial_session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=session_date,
+                session=initial_session,
+            )
+            db_store = SQLiteStore(_database_path())
+            db_store.initialize()
+            health = FeedHealth(
+                market.instruments,
+                config.stale_tick_seconds,
+                config.stale_option_seconds,
+            )
+            first_session = [initial_session]
+
+            def session_provider():
+                if first_session:
+                    return first_session.pop()
+                return authenticate(credential_store, transport)
+
+            def backfill_action(start: datetime, end: datetime):
+                return backfill_core_market(
+                    db_store,
+                    initial_session,
+                    transport,
+                    market.instruments,
+                    start,
+                    end,
+                )
+
+            def live_action(seconds: float):
+                feed = LiveFeed(
+                    session_provider,
+                    market.instruments,
+                    health,
+                    tick_sink=OptionSnapshotSink(db_store, market.instruments),
+                )
+                return feed.run_probe(seconds)
+
+            coordinator = SessionCoordinator(
+                schedule,
+                warmup_start_grace_seconds=config.warmup_start_grace_seconds,
+            )
+            result = WarmupRunner(
+                schedule,
+                coordinator,
+                backfill_action,
+                live_action,
+            ).run(now)
+        except Exception:
+            print("SESSION: NO TRADE")
+            print("Reason: PREPARATION_FAILED")
+            return 1
+        finally:
+            if db_store is not None:
+                db_store.close()
+
+        print(f"SESSION: {result.state.value}")
+        if result.initial_backfill is not None:
+            print(
+                "Initial backfill: "
+                f"{result.initial_backfill.candle_rows} candles, "
+                f"{result.initial_backfill.oi_rows} OI"
+            )
+        if result.final_backfill is not None:
+            print(
+                "Warm-up backfill: "
+                f"{result.final_backfill.candle_rows} candles, "
+                f"{result.final_backfill.oi_rows} OI"
+            )
+        if result.health is not None:
+            print(
+                "Fresh instruments: "
+                f"{result.health.fresh_count}/{result.health.expected_count}"
+            )
+        if result.reasons:
+            print(f"Reason: {', '.join(result.reasons)}")
+        return 0 if result.state == SessionState.READY else 1
+
     if argv:
         print(
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
-            "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM]"
+            "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD]"
         )
         return 2
 

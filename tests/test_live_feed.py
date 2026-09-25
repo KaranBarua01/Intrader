@@ -12,19 +12,33 @@ from intrader.live_feed import LiveFeed
 
 
 def _instrument(token: str, exchange: str) -> Instrument:
-    return Instrument(token, token, "NIFTY", "OPTIDX", exchange, date(2026, 9, 29), Decimal(23150), 65)
+    return Instrument(
+        token, token, "NIFTY", "OPTIDX", exchange,
+        date(2026, 9, 29), Decimal(23150), 65,
+    )
 
 
 def _bundle() -> NiftyInstruments:
     return NiftyInstruments(
-        _instrument("spot", "NSE"), _instrument("vix", "NSE"), _instrument("future", "NFO"),
-        date(2026, 9, 29), Decimal(23150), (Decimal(23150),),
-        (_instrument("call", "NFO"),), (_instrument("put", "NFO"),),
+        _instrument("spot", "NSE"),
+        _instrument("vix", "NSE"),
+        _instrument("future", "NFO"),
+        date(2026, 9, 29),
+        Decimal(23150),
+        (Decimal(23150),),
+        (_instrument("call", "NFO"),),
+        (_instrument("put", "NFO"),),
     )
 
 
 def _session(suffix: str) -> SmartSession:
-    return SmartSession("dummy-api-key", "dummy-client", f"dummy-jwt-{suffix}", "dummy-refresh", "dummy-feed")
+    return SmartSession(
+        "dummy-api-key",
+        "dummy-client",
+        f"dummy-jwt-{suffix}",
+        "dummy-refresh",
+        "dummy-feed",
+    )
 
 
 class FakeSocket:
@@ -63,7 +77,12 @@ def test_socket_uses_tls_and_subscribes_without_logging_tokens() -> None:
 
     bundle = _bundle()
     health = FeedHealth(bundle, 5, 8)
-    feed = LiveFeed(lambda: _session("one"), bundle, health, socket_factory=factory)
+    feed = LiveFeed(
+        lambda: _session("one"),
+        bundle,
+        health,
+        socket_factory=factory,
+    )
     feed.run(max_attempts=1)
 
     assert len(sockets) == 1
@@ -92,7 +111,12 @@ def test_reconnect_uses_fresh_session_and_resubscribes_every_group(monkeypatch) 
         return socket
 
     bundle = _bundle()
-    feed = LiveFeed(provider, bundle, FeedHealth(bundle, 5, 8), socket_factory=factory)
+    feed = LiveFeed(
+        provider,
+        bundle,
+        FeedHealth(bundle, 5, 8),
+        socket_factory=factory,
+    )
     delays: list[float] = []
     monkeypatch.setattr(feed._stop, "wait", lambda delay: delays.append(delay))
 
@@ -100,7 +124,9 @@ def test_reconnect_uses_fresh_session_and_resubscribes_every_group(monkeypatch) 
 
     assert attempts == ["1", "2", "3"]
     assert [socket.header["Authorization"] for socket in sockets] == [
-        "dummy-jwt-1", "dummy-jwt-2", "dummy-jwt-3",
+        "dummy-jwt-1",
+        "dummy-jwt-2",
+        "dummy-jwt-3",
     ]
     assert all(len(socket.sent) == 2 for socket in sockets)
     assert delays == [1, 2]
@@ -109,7 +135,12 @@ def test_reconnect_uses_fresh_session_and_resubscribes_every_group(monkeypatch) 
 def test_probe_is_bounded_and_reports_no_trade_without_fresh_ticks() -> None:
     bundle = _bundle()
     health = FeedHealth(bundle, 5, 8)
-    feed = LiveFeed(lambda: _session("probe"), bundle, health, socket_factory=FakeSocket)
+    feed = LiveFeed(
+        lambda: _session("probe"),
+        bundle,
+        health,
+        socket_factory=FakeSocket,
+    )
 
     snapshot = feed.run_probe(0.02)
 
@@ -117,11 +148,18 @@ def test_probe_is_bounded_and_reports_no_trade_without_fresh_ticks() -> None:
     assert snapshot.expected_count == 5
 
 
-def test_cli_live_probe_reports_no_trade_without_exposing_tokens(tmp_path, monkeypatch, capsys) -> None:\n    monkeypatch.chdir(tmp_path)
+def test_cli_live_probe_reports_no_trade_without_exposing_tokens(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
     bundle = _bundle()
     monkeypatch.setattr(
+        "intrader.__main__.authenticate",
+        lambda *_args: _session("initial"),
+    )
+    monkeypatch.setattr(
         "intrader.__main__.check_market_access",
-        lambda *_args: Checkpoint2Report(Decimal(23150), bundle),
+        lambda *_args, **_kwargs: Checkpoint2Report(Decimal(23150), bundle),
     )
 
     class FakeFeed:
@@ -142,7 +180,6 @@ def test_cli_live_probe_reports_no_trade_without_exposing_tokens(tmp_path, monke
     assert "dummy-" not in output
 
 
-
 def test_tick_sink_failure_closes_socket_and_forces_no_trade() -> None:
     bundle = _bundle()
     health = FeedHealth(bundle, 5, 8)
@@ -159,8 +196,14 @@ def test_tick_sink_failure_closes_socket_and_forces_no_trade() -> None:
             packet[1] = 2
             packet[2:27] = b"call".ljust(25, b"\x00")
             struct.pack_into("<q", packet, 27, 1)
-            struct.pack_into("<q", packet, 35, int(datetime.now(timezone.utc).timestamp() * 1000))
+            struct.pack_into(
+                "<q",
+                packet,
+                35,
+                int(datetime.now(timezone.utc).timestamp() * 1000),
+            )
             struct.pack_into("<q", packet, 43, 12550)
+            struct.pack_into("<q", packet, 67, 5000)
             struct.pack_into("<q", packet, 131, 1000)
             self.on_data(self, bytes(packet), 2, True)
 

@@ -1,6 +1,6 @@
 # Intrader Phase 2 Checkpoint 5 — Market Brain
 
-**Status:** IN PROGRESS.
+**Status:** IMPLEMENTATION COMPLETE. Family-weighted scoring, hard gates, optional breadth/context coverage, synchronized SQLite pipeline, final advisory states, diagnostic command, and tests are committed. Thresholds remain intentionally uncalibrated pending shadow/outcome data; full local Python 3.11 regression verification is pending.
 
 **Goal:** Combine Phase 2 measurement families into deterministic Direction, Entry Quality, Reversal/Chase Risk, Confidence and final advisory state while explicitly preventing correlated indicators from being counted as independent evidence.
 

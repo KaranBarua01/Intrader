@@ -290,7 +290,13 @@ def build_options_intelligence(
     puts = [metric for metric in metrics if metric.option_type == "PE"]
     call_strikes = {metric.strike for metric in calls}
     put_strikes = {metric.strike for metric in puts}
-    if not calls or not puts or call_strikes != put_strikes:
+    if (
+        not calls
+        or not puts
+        or call_strikes != put_strikes
+        or len(calls) != len(call_strikes)
+        or len(puts) != len(put_strikes)
+    ):
         raise OptionsIntelligenceError("option strike pairs incomplete")
 
     total_call_oi = sum(metric.current_open_interest for metric in calls)

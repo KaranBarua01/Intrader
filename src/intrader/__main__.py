@@ -25,7 +25,7 @@ from intrader.session import (
     WarmupRunner,
     build_session_schedule,
 )
-from intrader.storage import OptionSnapshotSink, SQLiteStore
+from intrader.storage import MarketSnapshotSink, OptionSnapshotSink, SQLiteStore
 
 
 def _database_path() -> Path:
@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
                 session_provider,
                 report.instruments,
                 health,
-                tick_sink=OptionSnapshotSink(db_store, report.instruments),
+                tick_sink=MarketSnapshotSink(db_store, report.instruments),
             )
             snapshot = feed.run_probe(int(argv[1]))
         except Exception:
@@ -382,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
                     session_provider,
                     market.instruments,
                     health,
-                    tick_sink=OptionSnapshotSink(db_store, market.instruments),
+                    tick_sink=MarketSnapshotSink(db_store, market.instruments),
                 )
                 return feed.run_probe(seconds)
 

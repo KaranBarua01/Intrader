@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from intrader.auth import HTTPTransport, authenticate, request_headers
+from intrader.auth import HTTPTransport, SmartSession, authenticate, request_headers
 from intrader.instruments import (
     InstrumentError,
     NiftyInstruments,
@@ -34,6 +34,7 @@ def check_market_access(
     *,
     as_of: date | None = None,
     now: datetime | None = None,
+    session: SmartSession | None = None,
 ) -> Checkpoint2Report:
     """Verify authentication and one NIFTY spot quote, then resolve contracts."""
 
@@ -52,8 +53,8 @@ def check_market_access(
     spot = spots[0]
 
     try:
-        session = authenticate(store, transport, now=now)
-        headers = request_headers(session.api_key, transport.public_ip(), session.jwt_token)
+        active_session = session or authenticate(store, transport, now=now)
+        headers = request_headers(active_session.api_key, transport.public_ip(), active_session.jwt_token)
         quote = transport.post_json(
             QUOTE_URL,
             headers,

@@ -15,6 +15,7 @@ from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
 from intrader.live_feed import LiveFeed
+from intrader.market_confirmation_pipeline import build_stored_market_confirmation
 from intrader.options_pipeline import OptionsPipelineError, build_stored_options_intelligence
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
 from intrader.secrets import REQUIRED_SECRET_NAMES
@@ -318,6 +319,71 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if argv and argv[0] == "market-confirmation":
+        if len(argv) != 3:
+            print("Usage: python -m intrader market-confirmation YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=session_date,
+                session=session,
+            )
+            with SQLiteStore(_database_path()) as db_store:
+                snapshot = build_stored_market_confirmation(
+                    db_store,
+                    market.instruments,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("MARKET CONFIRMATION UNAVAILABLE")
+            return 1
+
+        def display(value):
+            return "N/A" if value is None else str(value)
+
+        print("MARKET CONFIRMATION OK")
+        print(f"At: {snapshot.at.astimezone(INDIA_TIME):%Y-%m-%d %H:%M %Z}")
+        print(f"Lookback: {snapshot.lookback_minutes} minutes")
+        print(f"Future LTP: {snapshot.futures.ltp}")
+        print(f"Future dLTP: {snapshot.futures.ltp_change}")
+        print(f"Future OI: {snapshot.futures.open_interest}")
+        print(f"Future dOI: {snapshot.futures.open_interest_change}")
+        print(f"Future volume: {snapshot.futures.volume}")
+        print(f"Future dVolume: {snapshot.futures.volume_change}")
+        print(f"Future buildup: {snapshot.futures.buildup}")
+        print(f"Basis: {snapshot.futures.basis}")
+        print(f"Basis change: {snapshot.futures.basis_change}")
+        print(f"VIX: {snapshot.vix.value}")
+        print(f"VIX change: {snapshot.vix.change}")
+        print(f"VIX change %: {display(snapshot.vix.change_pct)}")
+        print(
+            "Total buy/sell ratio: "
+            f"{display(snapshot.order_flow.total_buy_sell_ratio)}"
+        )
+        print(
+            "Depth buy/sell ratio: "
+            f"{display(snapshot.order_flow.depth_buy_sell_ratio)}"
+        )
+        print(
+            "Depth imbalance: "
+            f"{display(snapshot.order_flow.depth_imbalance)}"
+        )
+        print(f"Best bid: {display(snapshot.order_flow.best_bid)}")
+        print(f"Best ask: {display(snapshot.order_flow.best_ask)}")
+        print(f"Spread: {display(snapshot.order_flow.spread)}")
+        print(f"Spread bps: {display(snapshot.order_flow.spread_bps)}")
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -432,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM]"
         )
         return 2
 

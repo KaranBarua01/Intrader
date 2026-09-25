@@ -8,6 +8,7 @@ import sys
 from intrader import __version__
 from intrader.auth import RequestsTransport, authenticate
 from intrader.backfill import BackfillError, backfill_core_market
+from intrader.brain_pipeline import build_stored_market_brain
 from intrader.breadth_pipeline import build_stored_breadth
 from intrader.breadth_provider import (\n    RequestsTextTransport,\n    fetch_nifty50_constituents,\n    resolve_breadth_members,\n)\nfrom intrader.checkpoint2 import MarketAccessError, check_market_access
 from intrader.config import load_config
@@ -493,6 +494,51 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if argv and argv[0] == "market-brain":
+        if len(argv) != 3:
+            print("Usage: python -m intrader market-brain YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=session_date,
+                session=session,
+            )
+            with SQLiteStore(_database_path()) as db_store:
+                snapshot = build_stored_market_brain(
+                    db_store,
+                    market.instruments,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("MARKET BRAIN: NO TRADE")
+            print("Reason: CORE_DATA_UNAVAILABLE")
+            return 1
+
+        print(f"MARKET BRAIN: {snapshot.state}")
+        print(f"Direction: {snapshot.direction_score}")
+        print(f"Entry quality: {snapshot.entry_quality}")
+        print(f"Reversal risk: {snapshot.reversal_risk}")
+        print(f"Confidence: {snapshot.confidence}")
+        print(f"Family coverage: {snapshot.family_coverage}")
+        for family in snapshot.families:
+            print(
+                f"{family.name} | weight {family.weight} | "
+                f"value {family.value}"
+            )
+        if snapshot.reasons:
+            print(f"Reason: {', '.join(snapshot.reasons)}")
+        return 0 if snapshot.state != "NO TRADE" else 1
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -614,7 +660,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM]"
         )
         return 2
 

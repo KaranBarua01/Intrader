@@ -6,6 +6,8 @@ import ssl
 import threading
 from typing import Callable
 
+from intrader.stream_protocol import MarketTick
+
 import websocket
 
 from intrader.auth import SmartSession
@@ -27,11 +29,13 @@ class LiveFeed:
         health: FeedHealth,
         *,
         socket_factory: Callable = websocket.WebSocketApp,
+        tick_sink: Callable[[MarketTick], None] | None = None,
     ) -> None:
         self._session_provider = session_provider
         self._instruments = instruments
         self._health = health
         self._socket_factory = socket_factory
+        self._tick_sink = tick_sink
         self._stop = threading.Event()
         self._active = None
 
@@ -62,6 +66,13 @@ class LiveFeed:
                 tick = decode_tick(data, datetime.now(timezone.utc))
             except InvalidPacket:
                 return
+            if self._tick_sink is not None:
+                try:
+                    self._tick_sink(tick)
+                except Exception:
+                    self._health.on_disconnected()
+                    _socket.close()
+                    return
             self._health.accept(tick)
 
         def on_error(_socket, _error) -> None:

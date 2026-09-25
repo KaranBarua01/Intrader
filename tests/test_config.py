@@ -26,3 +26,4 @@ def test_default_data_health_thresholds() -> None:
 
     assert config.stale_tick_seconds == 5.0
     assert config.stale_option_seconds == 8.0
+    assert config.warmup_start_grace_seconds == 120

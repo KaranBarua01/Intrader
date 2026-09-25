@@ -52,8 +52,14 @@ class FeedHealth:
         if not self._connected or expected is None or tick.mode != expected[0]:
             return
         previous = self._latest.get(key)
-        if previous is not None and tick.sequence <= previous.sequence:
-            return
+        if previous is not None:
+            if tick.exchange_at < previous.exchange_at:
+                return
+            if (
+                tick.exchange_at == previous.exchange_at
+                and tick.sequence <= previous.sequence
+            ):
+                return
         self._latest[key] = tick
 
     def snapshot(self, now: datetime) -> HealthSnapshot:

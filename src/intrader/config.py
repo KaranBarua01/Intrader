@@ -17,6 +17,7 @@ class AppConfig:
     timezone: str = "Asia/Kolkata"
     stale_tick_seconds: float = 5.0
     stale_option_seconds: float = 8.0
+    warmup_start_grace_seconds: int = 120
 
 
 def _parse_time(value: str) -> time:

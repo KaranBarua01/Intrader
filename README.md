@@ -67,3 +67,30 @@ python -m intrader check-live-feed 20
 `READY` requires fresh NIFTY spot, India VIX, nearest future, and all selected ATM ±4 CE/PE ticks. Any missing, stale, disconnected, or malformed critical data gives `NO TRADE`. Outside market hours, `NO TRADE` is expected. The probe sends no orders and ends automatically after the requested seconds.
 
 Intrader is currently in Phase 1, Checkpoint 3. Signals and the dashboard are not implemented yet.
+
+
+## Phase 1 Checkpoint 4 — local persistence and backfill
+
+Initialize the restart-safe local SQLite database:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader init-storage
+```
+
+The database is created at `data\intrader.db` and uses SQLite WAL mode. It stores:
+
+- NIFTY / India VIX / nearest-future one-minute candles
+- nearest-future historical OI observations
+- live ATM ±4 CE/PE option snapshots with LTP, OI, volume, timestamps and sequence
+
+Run a read-only historical backfill for a market session:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader backfill-session 2026-09-25 09:15 2026-09-25 15:30
+```
+
+Running the same backfill again is safe: candle and OI primary keys update existing rows instead of creating duplicates.
+
+`check-live-feed` now also writes resolved option SNAP_QUOTE observations to the same SQLite database. A database write failure forces the feed to `NO TRADE`.
+
+Checkpoint 4 code is implemented and offline-tested. The remaining checkpoint gate is one successful real historical backfill on the Windows/Python 3.11 machine.

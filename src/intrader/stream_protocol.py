@@ -39,12 +39,12 @@ def decode_tick(frame: bytes, received_at: datetime) -> MarketTick:
         token = frame[2:27].split(b"\x00", 1)[0].decode("ascii")
         sequence, timestamp_ms, price_units = struct.unpack_from("<qqq", frame, 27)
         exchange_at = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc)
-        open_interest = struct.unpack_from("<q", frame, 131)[0] if mode == 3 else None
+        volume = struct.unpack_from("<q", frame, 67)[0] if mode in (2, 3) else None\n        open_interest = struct.unpack_from("<q", frame, 131)[0] if mode == 3 else None
     except (UnicodeDecodeError, OverflowError, OSError, ValueError, struct.error):
         raise InvalidPacket("market packet invalid") from None
     if (
         not token or sequence < 0 or timestamp_ms <= 0 or price_units <= 0
-        or (open_interest is not None and open_interest < 0)
+        or (volume is not None and volume < 0)\n        or (open_interest is not None and open_interest < 0)
     ):
         raise InvalidPacket("market packet invalid")
     return MarketTick(

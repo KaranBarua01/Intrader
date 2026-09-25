@@ -269,12 +269,13 @@ def main(argv: list[str] | None = None) -> int:
                 schedule,
                 warmup_start_grace_seconds=config.warmup_start_grace_seconds,
             )
+            preparation_started = _now_india()
             result = WarmupRunner(
                 schedule,
                 coordinator,
                 backfill_action,
                 live_action,
-            ).run(now)
+            ).run(preparation_started)
         except Exception:
             print("SESSION: NO TRADE")
             print("Reason: PREPARATION_FAILED")

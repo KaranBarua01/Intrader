@@ -92,7 +92,10 @@ def main(argv: list[str] | None = None) -> int:
             config = load_config()
             credential_store = CredentialStore()
             transport = RequestsTransport()
-            report = check_market_access(credential_store, transport)
+            initial_session = authenticate(credential_store, transport)
+            report = check_market_access(
+                credential_store, transport, session=initial_session
+            )
             db_store = SQLiteStore(_database_path())
             db_store.initialize()
             health = FeedHealth(
@@ -100,8 +103,15 @@ def main(argv: list[str] | None = None) -> int:
                 config.stale_tick_seconds,
                 config.stale_option_seconds,
             )
+            first_session = [initial_session]
+
+            def session_provider():
+                if first_session:
+                    return first_session.pop()
+                return authenticate(credential_store, transport)
+
             feed = LiveFeed(
-                lambda: authenticate(credential_store, transport),
+                session_provider,
                 report.instruments,
                 health,
                 tick_sink=OptionSnapshotSink(db_store, report.instruments),
@@ -147,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
                     start,
                     end,
                 )
-        except (ValueError, BackfillError, Exception):
+        except Exception:
             print("BACKFILL UNAVAILABLE")
             return 1
         print("BACKFILL OK")

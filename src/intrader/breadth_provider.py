@@ -105,15 +105,15 @@ def fetch_nifty50_constituents(
     return parse_nifty50_constituents(text)
 
 
-def resolve_breadth_universe(
-    text_transport: TextTransport,
-    master_transport: MasterTransport,
+def resolve_breadth_members(
+    constituents: Sequence[NiftyConstituent],
+    master: Sequence[Instrument],
 ) -> tuple[ResolvedBreadthMember, ...]:
-    """Resolve all current NIFTY 50 public constituents to exact NSE -EQ tokens."""
+    """Resolve already-fetched official membership against an existing master."""
 
-    constituents = fetch_nifty50_constituents(text_transport)
+    if len(constituents) != 50:
+        raise BreadthProviderError("NIFTY 50 constituent count invalid")
     try:
-        master = fetch_full_instrument_master(master_transport)
         equities = resolve_nse_equities(
             master,
             [member.symbol for member in constituents],
@@ -130,3 +130,17 @@ def resolve_breadth_universe(
         )
         for member in constituents
     )
+
+
+def resolve_breadth_universe(
+    text_transport: TextTransport,
+    master_transport: MasterTransport,
+) -> tuple[ResolvedBreadthMember, ...]:
+    """Resolve all current NIFTY 50 public constituents to exact NSE -EQ tokens."""
+
+    constituents = fetch_nifty50_constituents(text_transport)
+    try:
+        master = fetch_full_instrument_master(master_transport)
+    except InstrumentError:
+        raise BreadthProviderError("NIFTY equity tokens unavailable") from None
+    return resolve_breadth_members(constituents, master)

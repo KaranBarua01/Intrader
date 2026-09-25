@@ -226,3 +226,59 @@ def test_tick_sink_failure_closes_socket_and_forces_no_trade() -> None:
 
     assert sockets[0].closed
     assert health.snapshot(datetime.now(timezone.utc)).state == "NO TRADE"
+
+
+
+def test_optional_breadth_subscription_does_not_change_core_modes() -> None:
+    sockets: list[FakeSocket] = []
+
+    def factory(**kwargs):
+        socket = FakeSocket(**kwargs)
+        sockets.append(socket)
+        return socket
+
+    bundle = _bundle()
+    feed = LiveFeed(
+        lambda: _session("breadth"),
+        bundle,
+        FeedHealth(bundle, 5, 8),
+        socket_factory=factory,
+        breadth_tokens=("101", "102"),
+    )
+    feed.run(max_attempts=1)
+
+    assert [message["params"]["mode"] for message in sockets[0].sent] == [1, 3, 2]
+    assert sockets[0].sent[2]["params"]["tokenList"][0]["tokens"] == ["101", "102"]
+
+
+def test_failed_optional_breadth_send_does_not_close_core_socket() -> None:
+    sockets = []
+
+    class BreadthFailSocket(FakeSocket):
+        def send(self, value: str) -> None:
+            message = json.loads(value)
+            if message.get("correlationID") == "intrader03":
+                raise RuntimeError("breadth unavailable")
+            self.sent.append(message)
+
+        def run_forever(self, **kwargs) -> None:
+            self.run_options = kwargs
+            self.on_open(self)
+
+    def factory(**kwargs):
+        socket = BreadthFailSocket(**kwargs)
+        sockets.append(socket)
+        return socket
+
+    bundle = _bundle()
+    feed = LiveFeed(
+        lambda: _session("breadth-fail"),
+        bundle,
+        FeedHealth(bundle, 5, 8),
+        socket_factory=factory,
+        breadth_tokens=("101",),
+    )
+    feed.run(max_attempts=1)
+
+    assert not sockets[0].closed
+    assert [message["params"]["mode"] for message in sockets[0].sent] == [1, 3]

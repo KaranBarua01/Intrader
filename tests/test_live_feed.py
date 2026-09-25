@@ -191,7 +191,7 @@ def test_tick_sink_failure_closes_socket_and_forces_no_trade() -> None:
             self.on_open(self)
             import struct
 
-            packet = bytearray(139)
+            packet = bytearray(379)
             packet[0] = 3
             packet[1] = 2
             packet[2:27] = b"call".ljust(25, b"\x00")

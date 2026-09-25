@@ -8,7 +8,8 @@ import sys
 from intrader import __version__
 from intrader.auth import RequestsTransport, authenticate
 from intrader.backfill import BackfillError, backfill_core_market
-from intrader.checkpoint2 import MarketAccessError, check_market_access
+from intrader.breadth_pipeline import build_stored_breadth
+from intrader.breadth_provider import (\n    RequestsTextTransport,\n    fetch_nifty50_constituents,\n    resolve_breadth_members,\n)\nfrom intrader.checkpoint2 import MarketAccessError, check_market_access
 from intrader.config import load_config
 from intrader.credentials import CredentialStore, credential_is_valid
 from intrader.doctor import run_doctor
@@ -41,6 +42,18 @@ def _parse_india_datetime(day: str, clock: str) -> datetime:
 
 def _now_india() -> datetime:
     return datetime.now(INDIA_TIME)
+
+
+def _optional_breadth_members(market_report):
+    """Resolve current NIFTY 50 breadth without making it a core dependency."""
+
+    if not market_report.master:
+        return ()
+    try:
+        constituents = fetch_nifty50_constituents(RequestsTextTransport())
+        return resolve_breadth_members(constituents, market_report.master)
+    except Exception:
+        return ()
 
 
 def _print_schedule(schedule) -> None:
@@ -131,6 +144,10 @@ def main(argv: list[str] | None = None) -> int:
             report = check_market_access(
                 credential_store, transport, session=initial_session
             )
+            breadth_members = _optional_breadth_members(report)
+            breadth_tokens = tuple(
+                member.instrument.token for member in breadth_members
+            )
             db_store = SQLiteStore(_database_path())
             db_store.initialize()
             health = FeedHealth(
@@ -149,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
                 session_provider,
                 report.instruments,
                 health,
-                tick_sink=MarketSnapshotSink(db_store, report.instruments),
+                tick_sink=MarketSnapshotSink(
+                    db_store, report.instruments, breadth_members
+                ),
+                breadth_tokens=breadth_tokens,
             )
             snapshot = feed.run_probe(int(argv[1]))
         except Exception:
@@ -384,6 +404,45 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Spread bps: {display(snapshot.order_flow.spread_bps)}")
         return 0
 
+    if argv and argv[0] == "breadth":
+        if len(argv) != 3:
+            print("Usage: python -m intrader breadth YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            with SQLiteStore(_database_path()) as db_store:
+                snapshot = build_stored_breadth(
+                    db_store,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("BREADTH UNAVAILABLE")
+            return 1
+
+        def display(value):
+            return "N/A" if value is None else str(value)
+
+        print("BREADTH OK")
+        print(f"At: {snapshot.at.astimezone(INDIA_TIME):%Y-%m-%d %H:%M %Z}")
+        print(f"Members: {snapshot.total}")
+        print(f"Advancing: {snapshot.advancing}")
+        print(f"Declining: {snapshot.declining}")
+        print(f"Unchanged: {snapshot.unchanged}")
+        print(f"A/D ratio: {display(snapshot.advance_decline_ratio)}")
+        print(f"Equal-weight breadth %: {snapshot.equal_weight_breadth_pct}")
+        print(f"Weighted return %: {display(snapshot.weighted_return_pct)}")
+        for sector in snapshot.sectors:
+            print(
+                f"{sector.sector} | ADV {sector.advancing} "
+                f"DEC {sector.declining} UNCH {sector.unchanged} "
+                f"BREADTH {sector.equal_weight_breadth_pct}"
+            )
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -419,6 +478,10 @@ def main(argv: list[str] | None = None) -> int:
                 as_of=session_date,
                 session=initial_session,
             )
+            breadth_members = _optional_breadth_members(market)
+            breadth_tokens = tuple(
+                member.instrument.token for member in breadth_members
+            )
             db_store = SQLiteStore(_database_path())
             db_store.initialize()
             health = FeedHealth(
@@ -448,7 +511,10 @@ def main(argv: list[str] | None = None) -> int:
                     session_provider,
                     market.instruments,
                     health,
-                    tick_sink=MarketSnapshotSink(db_store, market.instruments),
+                    tick_sink=MarketSnapshotSink(
+                        db_store, market.instruments, breadth_members
+                    ),
+                    breadth_tokens=breadth_tokens,
                 )
                 return feed.run_probe(seconds)
 
@@ -498,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM]"
         )
         return 2
 

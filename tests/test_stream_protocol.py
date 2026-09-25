@@ -56,7 +56,7 @@ def test_decodes_snap_quote_open_interest_without_using_percentage_field() -> No
 
     assert tick.exchange == "NFO"
     assert tick.token == "68407"
-    assert tick.open_interest == 1_234_567
+    assert tick.open_interest == 1_234_567\n    assert tick.volume == 987_654
 
 
 @pytest.mark.parametrize("frame", [_frame(1, 1)[:50], _frame(3, 2)[:138], _frame(4, 2), _frame(1, 9)])

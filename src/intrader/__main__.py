@@ -15,6 +15,7 @@ from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
 from intrader.live_feed import LiveFeed
+from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
 from intrader.secrets import REQUIRED_SECRET_NAMES
 from intrader.session import (
     SessionCoordinator,
@@ -197,6 +198,57 @@ def main(argv: list[str] | None = None) -> int:
         print(f"OI rows processed: {report.oi_rows}")
         return 0
 
+    if argv and argv[0] == "price-structure":
+        if len(argv) != 3:
+            print("Usage: python -m intrader price-structure YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=session_date,
+                session=session,
+            )
+            with SQLiteStore(_database_path()) as db_store:
+                snapshot = build_stored_price_structure(
+                    db_store,
+                    market.instruments,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("PRICE STRUCTURE UNAVAILABLE")
+            return 1
+
+        def display(value):
+            return "N/A" if value is None else str(value)
+
+        print("PRICE STRUCTURE OK")
+        print(f"At: {snapshot.at.astimezone(INDIA_TIME):%Y-%m-%d %H:%M %Z}")
+        print(f"Spot close: {snapshot.spot_close}")
+        print(f"EMA 9: {snapshot.ema9}")
+        print(f"EMA 20: {snapshot.ema20}")
+        print(f"RSI 14: {snapshot.rsi14}")
+        print(f"ATR 14: {snapshot.atr14}")
+        print(f"Candle body: {snapshot.candle_body}")
+        print(f"Upper wick: {snapshot.upper_wick}")
+        print(f"Lower wick: {snapshot.lower_wick}")
+        print(f"Opening range high: {snapshot.opening_range_high}")
+        print(f"Opening range low: {snapshot.opening_range_low}")
+        print(f"Previous session high: {display(snapshot.previous_session_high)}")
+        print(f"Previous session low: {display(snapshot.previous_session_low)}")
+        print(f"Future close: {display(snapshot.future_close)}")
+        print(f"Future VWAP: {display(snapshot.future_vwap)}")
+        print(f"Relative volume: {display(snapshot.relative_volume)}")
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -311,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM]"
         )
         return 2
 

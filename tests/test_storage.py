@@ -41,7 +41,7 @@ def _candle(close: str = "23150") -> Candle:
 def _tick(token: str = "call", sequence: int = 1) -> MarketTick:
     return MarketTick(
         "NFO", token, 3, sequence, NOW, NOW,
-        Decimal("125.50"), 123456,
+        Decimal("125.50"), 123456, 987654,
     )
 
 

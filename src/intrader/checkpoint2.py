@@ -6,9 +6,10 @@ from decimal import Decimal, InvalidOperation
 
 from intrader.auth import HTTPTransport, SmartSession, authenticate, request_headers
 from intrader.instruments import (
+    Instrument,
     InstrumentError,
     NiftyInstruments,
-    fetch_instrument_master,
+    fetch_nifty_and_equity_master,
     resolve_nifty_instruments,
 )
 from intrader.secrets import SecretStore
@@ -26,6 +27,7 @@ class MarketAccessError(Exception):
 class Checkpoint2Report:
     spot_ltp: Decimal
     instruments: NiftyInstruments
+    master: tuple[Instrument, ...] = ()
 
 
 def check_market_access(
@@ -40,7 +42,7 @@ def check_market_access(
 
     current_date = as_of or datetime.now(INDIA_TIME).date()
     try:
-        master = fetch_instrument_master(transport)
+        master = fetch_nifty_and_equity_master(transport)
     except InstrumentError:
         raise MarketAccessError("Instrument master unavailable") from None
     spots = [
@@ -86,4 +88,4 @@ def check_market_access(
         bundle = resolve_nifty_instruments(master, current_date, ltp)
     except InstrumentError:
         raise MarketAccessError("NIFTY instrument resolution unavailable") from None
-    return Checkpoint2Report(ltp, bundle)
+    return Checkpoint2Report(ltp, bundle, tuple(master))

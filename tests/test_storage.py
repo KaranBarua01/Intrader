@@ -155,3 +155,54 @@ def test_load_candles_returns_ordered_filtered_history(tmp_path) -> None:
         Decimal("23115"),
         Decimal("23125"),
     ]
+
+
+
+def test_load_option_snapshots_filters_expiry_and_orders_rows(tmp_path) -> None:
+    bundle = _bundle()
+    call = bundle.calls[0]
+    later = NOW + timedelta(seconds=2)
+    earlier = NOW + timedelta(seconds=1)
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        store.store_option_tick(
+            call,
+            MarketTick(
+                "NFO",
+                call.token,
+                3,
+                2,
+                later,
+                later,
+                Decimal("126"),
+                124000,
+                988000,
+            ),
+        )
+        store.store_option_tick(
+            call,
+            MarketTick(
+                "NFO",
+                call.token,
+                3,
+                1,
+                earlier,
+                earlier,
+                Decimal("125"),
+                123000,
+                987000,
+            ),
+        )
+
+        loaded = store.load_option_snapshots(
+            start=NOW,
+            end=later,
+            expiry=call.expiry.isoformat(),
+        )
+
+    assert [snapshot.sequence for snapshot in loaded] == [1, 2]
+    assert [snapshot.ltp for snapshot in loaded] == [
+        Decimal("125.0"),
+        Decimal("126.0"),
+    ]
+    assert all(snapshot.token == call.token for snapshot in loaded)

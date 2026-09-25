@@ -11,8 +11,7 @@ from intrader.backfill import BackfillError, backfill_core_market
 from intrader.breadth_pipeline import build_stored_breadth
 from intrader.breadth_provider import (\n    RequestsTextTransport,\n    fetch_nifty50_constituents,\n    resolve_breadth_members,\n)\nfrom intrader.checkpoint2 import MarketAccessError, check_market_access
 from intrader.config import load_config
-from intrader.credentials import CredentialStore, credential_is_valid
-from intrader.doctor import run_doctor
+from intrader.context_pipeline import refresh_context\nfrom intrader.context_sources import RequestsContextTransport\nfrom intrader.credentials import CredentialStore, credential_is_valid\nfrom intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
 from intrader.live_feed import LiveFeed
@@ -443,6 +442,57 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if argv and argv[0] == "context":
+        if len(argv) != 3:
+            print("Usage: python -m intrader context YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            at = _parse_india_datetime(argv[1], argv[2])
+            with SQLiteStore(_database_path()) as db_store:
+                result = refresh_context(
+                    db_store,
+                    RequestsContextTransport(),
+                    at,
+                )
+        except Exception:
+            print("CONTEXT UNAVAILABLE")
+            return 1
+
+        snapshot = result.snapshot
+        print("CONTEXT OK")
+        print(
+            "Refreshed sources: "
+            + (", ".join(result.refreshed_sources) or "NONE")
+        )
+        print(
+            "Failed sources: "
+            + (", ".join(result.failed_sources) or "NONE")
+        )
+        next_high = snapshot.minutes_to_next_high_impact
+        print(
+            "Minutes to next HIGH event: "
+            + ("N/A" if next_high is None else str(next_high))
+        )
+        print(f"Active event windows: {len(snapshot.active_event_windows)}")
+        for event in snapshot.active_event_windows:
+            print(
+                f"ACTIVE {event.impact} | {event.source} | "
+                f"{event.name} | {event.scheduled_at.isoformat()}"
+            )
+        print(f"Upcoming events: {len(snapshot.upcoming_events)}")
+        for event in snapshot.upcoming_events:
+            print(
+                f"UPCOMING {event.impact} | {event.source} | "
+                f"{event.name} | {event.scheduled_at.isoformat()}"
+            )
+        print(f"Recent news: {len(snapshot.recent_news)}")
+        for item in snapshot.recent_news[:10]:
+            print(
+                f"NEWS | {item.source} | {item.published_at.isoformat()} | "
+                f"{item.title}"
+            )
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -564,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM]"
         )
         return 2
 

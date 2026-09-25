@@ -87,6 +87,7 @@ def run_doctor(
         and config.timezone == "Asia/Kolkata"
         and config.stale_tick_seconds > 0
         and config.stale_option_seconds > 0
+        and config.warmup_start_grace_seconds >= 0
     )
     checks.append(
         DoctorCheck("config", config_ok, "valid" if config_ok else "invalid")

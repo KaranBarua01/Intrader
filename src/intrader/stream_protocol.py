@@ -211,3 +211,27 @@ def subscription_messages(instruments: NiftyInstruments) -> tuple[dict, dict]:
             },
         },
     )
+
+
+
+def breadth_subscription_message(tokens) -> dict:
+    """Subscribe optional NSE constituent tokens in QUOTE mode."""
+
+    unique = tuple(dict.fromkeys(str(token) for token in tokens if str(token)))
+    if not unique:
+        raise ValueError("breadth tokens unavailable")
+    if len(unique) > 1000:
+        raise ValueError("breadth subscription exceeds token quota")
+    return {
+        "correlationID": "intrader03",
+        "action": 1,
+        "params": {
+            "mode": 2,
+            "tokenList": [
+                {
+                    "exchangeType": 1,
+                    "tokens": list(unique),
+                }
+            ],
+        },
+    }

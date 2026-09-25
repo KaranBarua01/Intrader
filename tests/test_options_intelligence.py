@@ -275,3 +275,34 @@ def test_stale_current_snapshot_fails_closed() -> None:
             NOW,
             expected_tokens=("100CE", "100PE"),
         )
+
+
+
+def test_duplicate_contract_for_same_side_and_strike_fails_closed() -> None:
+    histories = {
+        "A_CE": _history(
+            "A_CE", 100, "CE",
+            old_ltp="10", new_ltp="11",
+            old_oi=100, new_oi=110,
+            old_volume=1000, new_volume=1100,
+        ),
+        "B_CE": _history(
+            "B_CE", 100, "CE",
+            old_ltp="12", new_ltp="13",
+            old_oi=120, new_oi=130,
+            old_volume=1200, new_volume=1300,
+        ),
+        "A_PE": _history(
+            "A_PE", 100, "PE",
+            old_ltp="9", new_ltp="8",
+            old_oi=200, new_oi=210,
+            old_volume=900, new_volume=1000,
+        ),
+    }
+
+    with pytest.raises(OptionsIntelligenceError, match="pairs incomplete"):
+        build_options_intelligence(
+            histories,
+            NOW,
+            expected_tokens=("A_CE", "B_CE", "A_PE"),
+        )

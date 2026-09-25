@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -105,3 +105,53 @@ def test_option_sink_ignores_non_option_tokens_and_rejects_bad_option_tick(tmp_p
 
         with pytest.raises(StorageError):
             store.store_option_tick(bundle.calls[0], _tick("put"))
+
+
+
+def test_load_candles_returns_ordered_filtered_history(tmp_path) -> None:
+    bundle = _bundle()
+    candles = [
+        Candle(
+            NOW + timedelta(minutes=2),
+            Decimal("23120"),
+            Decimal("23130"),
+            Decimal("23110"),
+            Decimal("23125"),
+            120,
+        ),
+        Candle(
+            NOW,
+            Decimal("23100"),
+            Decimal("23110"),
+            Decimal("23090"),
+            Decimal("23105"),
+            100,
+        ),
+        Candle(
+            NOW + timedelta(minutes=1),
+            Decimal("23105"),
+            Decimal("23120"),
+            Decimal("23100"),
+            Decimal("23115"),
+            110,
+        ),
+    ]
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        store.store_candles(bundle.spot, "ONE_MINUTE", candles)
+        loaded = store.load_candles(
+            "NSE",
+            bundle.spot.token,
+            "ONE_MINUTE",
+            start=NOW + timedelta(minutes=1),
+            end=NOW + timedelta(minutes=2),
+        )
+
+    assert [candle.at for candle in loaded] == [
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(minutes=2),
+    ]
+    assert [candle.close for candle in loaded] == [
+        Decimal("23115"),
+        Decimal("23125"),
+    ]

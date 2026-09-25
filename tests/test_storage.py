@@ -5,8 +5,8 @@ import pytest
 
 from intrader.historical import Candle, OIObservation
 from intrader.instruments import Instrument, NiftyInstruments
-from intrader.storage import OptionSnapshotSink, SQLiteStore, StorageError
-from intrader.stream_protocol import MarketTick
+from intrader.storage import MarketSnapshotSink, OptionSnapshotSink, SQLiteStore, StorageError
+from intrader.stream_protocol import DepthLevel, MarketTick
 
 
 NOW = datetime(2026, 9, 25, 4, 0, tzinfo=timezone.utc)
@@ -52,7 +52,7 @@ def test_schema_initializes_twice_with_wal_and_reopens(tmp_path) -> None:
     store.initialize()
 
     assert store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 2
     store.store_candles(_bundle().spot, "ONE_MINUTE", [_candle()])
     store.close()
 
@@ -206,3 +206,61 @@ def test_load_option_snapshots_filters_expiry_and_orders_rows(tmp_path) -> None:
         Decimal("126.0"),
     ]
     assert all(snapshot.token == call.token for snapshot in loaded)
+
+
+
+def test_market_snapshot_sink_persists_spot_vix_and_future_order_flow(tmp_path) -> None:
+    bundle = _bundle()
+    now = NOW + timedelta(seconds=10)
+    spot_tick = MarketTick(
+        "NSE", bundle.spot.token, 1, 1, now, now,
+        Decimal("23150"), None,
+    )
+    vix_tick = MarketTick(
+        "NSE", bundle.vix.token, 1, 2, now, now,
+        Decimal("12.5"), None,
+    )
+    future_tick = MarketTick(
+        "NFO",
+        bundle.future.token,
+        3,
+        3,
+        now,
+        now,
+        Decimal("23200"),
+        150000,
+        250000,
+        total_buy_quantity=Decimal("50000"),
+        total_sell_quantity=Decimal("40000"),
+        best_5_buy=(
+            DepthLevel(Decimal("23199"), 1000, 10),
+            DepthLevel(Decimal("23198"), 800, 8),
+        ),
+        best_5_sell=(
+            DepthLevel(Decimal("23201"), 900, 9),
+            DepthLevel(Decimal("23202"), 700, 7),
+        ),
+    )
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        sink = MarketSnapshotSink(store, bundle)
+        sink(spot_tick)
+        sink(vix_tick)
+        sink(future_tick)
+
+        assert store.count("index_snapshots") == 2
+        assert store.count("future_snapshots") == 1
+
+        spot = store.load_index_snapshots(bundle.spot.token)
+        vix = store.load_index_snapshots(bundle.vix.token)
+        future = store.load_future_snapshots(bundle.future.token)
+
+    assert spot[0].ltp == Decimal("23150.0")
+    assert vix[0].ltp == Decimal("12.5")
+    assert future[0].ltp == Decimal("23200.0")
+    assert future[0].open_interest == 150000
+    assert future[0].volume == 250000
+    assert future[0].best_bid_price == Decimal("23199.0")
+    assert future[0].best_ask_price == Decimal("23201.0")
+    assert future[0].depth_buy_quantity == 1800
+    assert future[0].depth_sell_quantity == 1600

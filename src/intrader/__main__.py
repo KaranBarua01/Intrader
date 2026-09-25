@@ -15,6 +15,7 @@ from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
 from intrader.live_feed import LiveFeed
+from intrader.options_pipeline import OptionsPipelineError, build_stored_options_intelligence
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
 from intrader.secrets import REQUIRED_SECRET_NAMES
 from intrader.session import (
@@ -249,6 +250,74 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Relative volume: {display(snapshot.relative_volume)}")
         return 0
 
+    if argv and argv[0] == "options-intelligence":
+        if len(argv) != 3:
+            print("Usage: python -m intrader options-intelligence YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            with SQLiteStore(_database_path()) as db_store:
+                snapshot = build_stored_options_intelligence(
+                    db_store,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("OPTIONS INTELLIGENCE UNAVAILABLE")
+            return 1
+
+        def display(value):
+            return "N/A" if value is None else str(value)
+
+        print("OPTIONS INTELLIGENCE OK")
+        print(f"At: {snapshot.at.astimezone(INDIA_TIME):%Y-%m-%d %H:%M %Z}")
+        print(f"Lookback: {snapshot.lookback_minutes} minutes")
+        print(f"CE OI: {snapshot.total_call_open_interest}")
+        print(f"PE OI: {snapshot.total_put_open_interest}")
+        print(f"OI PCR: {display(snapshot.open_interest_pcr)}")
+        print(f"CE volume: {snapshot.total_call_volume}")
+        print(f"PE volume: {snapshot.total_put_volume}")
+        print(f"Volume PCR: {display(snapshot.volume_pcr)}")
+        print(
+            "Max CE OI strike: "
+            f"{snapshot.max_call_open_interest_strike}"
+        )
+        print(
+            "Max PE OI strike: "
+            f"{snapshot.max_put_open_interest_strike}"
+        )
+        print(
+            "Max +CE OI change strike: "
+            f"{display(snapshot.max_call_open_interest_change_strike)}"
+        )
+        print(
+            "Max +PE OI change strike: "
+            f"{display(snapshot.max_put_open_interest_change_strike)}"
+        )
+        print(
+            "CE OI concentration: "
+            f"{display(snapshot.call_open_interest_concentration)}"
+        )
+        print(
+            "PE OI concentration: "
+            f"{display(snapshot.put_open_interest_concentration)}"
+        )
+        for contract in snapshot.contracts:
+            print(
+                f"{contract.strike} {contract.option_type} | "
+                f"LTP {contract.current_ltp} "
+                f"dLTP {contract.ltp_change} "
+                f"OI {contract.current_open_interest} "
+                f"dOI {contract.open_interest_change} "
+                f"VOL {contract.current_volume} "
+                f"dVOL {contract.volume_change} "
+                f"{contract.buildup}"
+            )
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -363,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM]"
         )
         return 2
 

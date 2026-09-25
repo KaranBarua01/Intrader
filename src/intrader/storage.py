@@ -78,6 +78,7 @@ class SQLiteStore:
                     option_type TEXT NOT NULL CHECK(option_type IN ('CE', 'PE')),
                     ltp REAL NOT NULL CHECK(ltp > 0),
                     open_interest INTEGER NOT NULL CHECK(open_interest >= 0),
+                    volume INTEGER NOT NULL CHECK(volume >= 0),
                     PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
                 );
                 """
@@ -227,11 +228,14 @@ class SQLiteStore:
             or tick.token != instrument.token
             or tick.mode != 3
             or tick.open_interest is None
+            or tick.volume is None
         ):
             raise StorageError("option snapshot invalid")
         option_type = (
-            "CE" if instrument.symbol.endswith("CE")
-            else "PE" if instrument.symbol.endswith("PE")
+            "CE"
+            if instrument.symbol.endswith("CE")
+            else "PE"
+            if instrument.symbol.endswith("PE")
             else None
         )
         if option_type is None:
@@ -242,8 +246,8 @@ class SQLiteStore:
                     """
                     INSERT OR IGNORE INTO option_snapshots
                         (exchange, token, exchange_ts_utc, received_ts_utc, sequence,
-                         expiry, strike, option_type, ltp, open_interest)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         expiry, strike, option_type, ltp, open_interest, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         instrument.exchange,
@@ -256,6 +260,7 @@ class SQLiteStore:
                         option_type,
                         float(tick.last_price),
                         tick.open_interest,
+                        tick.volume,
                     ),
                 )
         except sqlite3.Error:

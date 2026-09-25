@@ -11,6 +11,18 @@ class BreadthError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class BreadthMarketSnapshot:
+    symbol: str
+    industry: str
+    token: str
+    exchange_at: datetime
+    received_at: datetime
+    sequence: int
+    current_price: Decimal
+    previous_close: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class BreadthMember:
     symbol: str
     previous_close: Decimal

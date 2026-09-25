@@ -1,6 +1,6 @@
 # Intrader Phase 2 Checkpoint 4 — News and Scheduled Event Context
 
-**Status:** IN PROGRESS.
+**Status:** IMPLEMENTATION COMPLETE. Non-directional context engine, RBI RSS, BLS ICS, Fed FOMC parser, SQLite cache, resilient refresh pipeline, diagnostic command, and tests are committed. Local Python 3.11 regression verification remains pending.
 
 **Goal:** Add zero-cost contextual awareness around scheduled macro events and authoritative recent releases without turning text/news into a direct market-direction signal.
 

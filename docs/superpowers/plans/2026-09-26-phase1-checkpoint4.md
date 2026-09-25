@@ -1,6 +1,6 @@
 # Intrader Phase 1 Checkpoint 4 Implementation Plan
 
-**Goal:** Add restart-safe SQLite persistence, read-only historical backfill, and local live option/OI snapshot collection.
+**Status:** Offline implementation complete; real Windows/SmartAPI backfill verification pending.\n\n**Goal:** Add restart-safe SQLite persistence, read-only historical backfill, and local live option/OI snapshot collection.
 
 **Architecture:** Use Python's built-in sqlite3 with WAL mode and idempotent primary keys. Historical data comes only from Angel One market-data endpoints. The backfill scope is NIFTY spot, India VIX, nearest NIFTY future candles, plus nearest-future historical OI. ATM ±4 option state is collected from the already-approved live SNAP_QUOTE stream during warm-up and live operation.
 

@@ -98,3 +98,35 @@ def refresh_context(
         refreshed_sources=tuple(sorted(set(refreshed))),
         failed_sources=tuple(sorted(set(failed))),
     )
+
+
+
+def load_cached_context(
+    store: SQLiteStore,
+    at: datetime,
+    *,
+    recent_hours: int = 24,
+    lookahead_hours: int = 24,
+) -> ContextSnapshot:
+    """Build context from the local cache without network access."""
+
+    if at.tzinfo is None:
+        raise ContextPipelineError("context timestamp must be timezone aware")
+    try:
+        news = store.load_news_items(
+            start=at - timedelta(hours=recent_hours),
+            end=at,
+        )
+        events = store.load_scheduled_events(
+            start=at - timedelta(minutes=15),
+            end=at + timedelta(hours=lookahead_hours),
+        )
+        return build_context_snapshot(
+            news,
+            events,
+            at,
+            recent_hours=recent_hours,
+            lookahead_hours=lookahead_hours,
+        )
+    except (StorageError, Exception):
+        raise ContextPipelineError("local context cache unavailable") from None

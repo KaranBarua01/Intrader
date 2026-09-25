@@ -128,3 +128,29 @@ The preparation engine:
 For data-integrity safety, starting more than 2 minutes after the configured warm-up start returns `NO TRADE: MISSED_WARMUP`, because the missing live option history cannot be reconstructed reliably.
 
 Checkpoint 5 is offline-tested. Final completion requires one real market-hours warm-up on the Windows/Python 3.11 machine.
+
+
+## Phase 2 Checkpoint 1 — Price Structure
+
+Phase 2 development lives on the `intrader-phase2` branch so the Phase 1 live-verification branch remains stable.
+
+The Price Structure engine currently calculates raw measurements only:
+
+- NIFTY spot EMA 9 / EMA 20
+- Wilder RSI 14
+- Wilder ATR 14
+- candle body and upper/lower wicks
+- first-15-minute opening range
+- previous stored spot-session high/low
+- nearest-future VWAP
+- cumulative relative futures volume versus prior stored sessions
+
+NIFTY spot/index volume is not used for VWAP. Futures volume is used instead, and futures VWAP remains a separate futures measurement so it is never incorrectly treated as the same price series as NIFTY spot.
+
+When sufficient stored data exists, the read-only diagnostic is:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader price-structure YYYY-MM-DD HH:MM
+```
+
+This command prints measurements only. Direction scoring and trade-state decisions are intentionally deferred to later Market Brain checkpoints.

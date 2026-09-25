@@ -79,3 +79,15 @@ def test_disconnect_and_reconnect_discard_prior_freshness() -> None:
     health.on_connected()
     assert health.snapshot(NOW).state == "NO TRADE"
     assert "MISSING_TICKS" in health.snapshot(NOW).reasons
+
+
+
+def test_index_ticks_with_constant_sequence_can_refresh_health() -> None:
+    health = _ready_health()
+    later = NOW + timedelta(seconds=4)
+
+    health.accept(_tick("spot", "NSE", sequence=1, at=later))
+    health.accept(_tick("vix", "NSE", sequence=1, at=later))
+
+    snapshot = health.snapshot(later)
+    assert "STALE_TICK" not in snapshot.reasons

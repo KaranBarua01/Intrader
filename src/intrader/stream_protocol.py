@@ -22,10 +22,11 @@ class MarketTick:
     received_at: datetime
     last_price: Decimal
     open_interest: int | None
+    volume: int | None = None
 
 
 def decode_tick(frame: bytes, received_at: datetime) -> MarketTick:
-    """Decode the documented V2 header and optional SNAP_QUOTE OI field."""
+    """Decode the documented V2 header plus public volume/OI fields."""
 
     if not isinstance(frame, bytes) or len(frame) < 51 or received_at.tzinfo is None:
         raise InvalidPacket("market packet invalid")
@@ -39,12 +40,17 @@ def decode_tick(frame: bytes, received_at: datetime) -> MarketTick:
         token = frame[2:27].split(b"\x00", 1)[0].decode("ascii")
         sequence, timestamp_ms, price_units = struct.unpack_from("<qqq", frame, 27)
         exchange_at = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc)
-        volume = struct.unpack_from("<q", frame, 67)[0] if mode in (2, 3) else None\n        open_interest = struct.unpack_from("<q", frame, 131)[0] if mode == 3 else None
+        volume = struct.unpack_from("<q", frame, 67)[0] if mode in (2, 3) else None
+        open_interest = struct.unpack_from("<q", frame, 131)[0] if mode == 3 else None
     except (UnicodeDecodeError, OverflowError, OSError, ValueError, struct.error):
         raise InvalidPacket("market packet invalid") from None
     if (
-        not token or sequence < 0 or timestamp_ms <= 0 or price_units <= 0
-        or (volume is not None and volume < 0)\n        or (open_interest is not None and open_interest < 0)
+        not token
+        or sequence < 0
+        or timestamp_ms <= 0
+        or price_units <= 0
+        or (volume is not None and volume < 0)
+        or (open_interest is not None and open_interest < 0)
     ):
         raise InvalidPacket("market packet invalid")
     return MarketTick(
@@ -56,6 +62,7 @@ def decode_tick(frame: bytes, received_at: datetime) -> MarketTick:
         received_at.astimezone(timezone.utc),
         Decimal(price_units) / 100,
         open_interest,
+        volume,
     )
 
 
@@ -69,11 +76,24 @@ def subscription_messages(instruments: NiftyInstruments) -> tuple[dict, dict]:
     ]
     return (
         {
-            "correlationID": "intrader01", "action": 1,
-            "params": {"mode": 1, "tokenList": [{"exchangeType": 1, "tokens": [instruments.spot.token, instruments.vix.token]}]},
+            "correlationID": "intrader01",
+            "action": 1,
+            "params": {
+                "mode": 1,
+                "tokenList": [
+                    {
+                        "exchangeType": 1,
+                        "tokens": [instruments.spot.token, instruments.vix.token],
+                    }
+                ],
+            },
         },
         {
-            "correlationID": "intrader02", "action": 1,
-            "params": {"mode": 3, "tokenList": [{"exchangeType": 2, "tokens": nfo_tokens}]},
+            "correlationID": "intrader02",
+            "action": 1,
+            "params": {
+                "mode": 3,
+                "tokenList": [{"exchangeType": 2, "tokens": nfo_tokens}],
+            },
         },
     )

@@ -111,6 +111,39 @@ def resolve_nse_equities(
     return resolved
 
 
+def fetch_nifty_and_equity_master(
+    transport: MasterTransport,
+) -> list[Instrument]:
+    """Fetch NIFTY/VIX plus NSE cash equities in one official-master request."""
+
+    try:
+        raw = transport.get_json(MASTER_URL, timeout=30)
+    except Exception:
+        raise InstrumentError("instrument master unavailable") from None
+    if not isinstance(raw, list):
+        raise InstrumentError("instrument master invalid")
+
+    instruments: list[Instrument] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).upper()
+        symbol = str(row.get("symbol", "")).upper()
+        exchange = str(row.get("exch_seg", "")).upper()
+        if (
+            name in {"NIFTY", "INDIA VIX"}
+            or (exchange == "NSE" and symbol.endswith("-EQ"))
+        ):
+            try:
+                instruments.append(_parse_relevant_row(row))
+            except InstrumentError:
+                continue
+
+    if not instruments:
+        raise InstrumentError("instrument master invalid")
+    return instruments
+
+
 def fetch_instrument_master(transport: MasterTransport) -> list[Instrument]:
     """Fetch and parse only NIFTY and India VIX rows from the official master."""
 

@@ -5,7 +5,7 @@ import struct
 import pytest
 
 from intrader.instruments import Instrument, NiftyInstruments
-from intrader.stream_protocol import InvalidPacket, decode_tick, subscription_messages
+from intrader.stream_protocol import (\n    InvalidPacket,\n    breadth_subscription_message,\n    decode_tick,\n    subscription_messages,\n)
 
 
 NOW = datetime(2026, 9, 28, 4, 0, tzinfo=timezone.utc)
@@ -133,3 +133,14 @@ def test_subscriptions_include_all_and_only_resolved_tokens() -> None:
     assert set(snap["params"]["tokenList"][0]["tokens"]) == (
         {"68407"} | {f"C{i}" for i in range(9)} | {f"P{i}" for i in range(9)}
     )
+
+
+
+def test_breadth_subscription_uses_separate_nse_quote_mode() -> None:
+    message = breadth_subscription_message(("101", "102", "101"))
+
+    assert message["action"] == 1
+    assert message["params"]["mode"] == 2
+    assert message["params"]["tokenList"] == [
+        {"exchangeType": 1, "tokens": ["101", "102"]}
+    ]

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intrader"
+version = "0.1.0"
+description = "Local NIFTY intraday market-analysis assistant"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "keyring>=25.5,<26",
+  "pyotp>=2.9,<3",
+  "requests>=2.32,<3",
+  "smartapi-python==1.5.5",
+  "websocket-client>=1.8,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"

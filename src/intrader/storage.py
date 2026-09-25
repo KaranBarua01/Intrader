@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class StorageError(Exception):
@@ -81,6 +81,36 @@ class SQLiteStore:
                     ltp REAL NOT NULL CHECK(ltp > 0),
                     open_interest INTEGER NOT NULL CHECK(open_interest >= 0),
                     volume INTEGER NOT NULL CHECK(volume >= 0),
+                    PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
+                );
+
+                CREATE TABLE IF NOT EXISTS index_snapshots (
+                    exchange TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    exchange_ts_utc TEXT NOT NULL,
+                    received_ts_utc TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence >= 0),
+                    ltp REAL NOT NULL CHECK(ltp > 0),
+                    PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
+                );
+
+                CREATE TABLE IF NOT EXISTS future_snapshots (
+                    exchange TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    exchange_ts_utc TEXT NOT NULL,
+                    received_ts_utc TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence >= 0),
+                    ltp REAL NOT NULL CHECK(ltp > 0),
+                    open_interest INTEGER NOT NULL CHECK(open_interest >= 0),
+                    volume INTEGER NOT NULL CHECK(volume >= 0),
+                    total_buy_quantity REAL NOT NULL CHECK(total_buy_quantity >= 0),
+                    total_sell_quantity REAL NOT NULL CHECK(total_sell_quantity >= 0),
+                    best_bid_price REAL,
+                    best_bid_quantity INTEGER NOT NULL CHECK(best_bid_quantity >= 0),
+                    best_ask_price REAL,
+                    best_ask_quantity INTEGER NOT NULL CHECK(best_ask_quantity >= 0),
+                    depth_buy_quantity INTEGER NOT NULL CHECK(depth_buy_quantity >= 0),
+                    depth_sell_quantity INTEGER NOT NULL CHECK(depth_sell_quantity >= 0),
                     PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
                 );
                 """
@@ -253,6 +283,115 @@ class SQLiteStore:
             for row in rows
         )
 
+    def load_index_snapshots(
+        self,
+        token: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple["IndexSnapshot", ...]:
+        """Load one stored NSE index stream in chronological order."""
+
+        clauses = ["token = ?"]
+        params: list[object] = [token]
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("index start timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("index end timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("index load range invalid")
+
+        try:
+            rows = self._connection.execute(
+                "SELECT token, exchange_ts_utc, received_ts_utc, sequence, ltp "
+                "FROM index_snapshots WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY exchange_ts_utc ASC, sequence ASC",
+                params,
+            ).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite index snapshot read failed") from None
+
+        from intrader.market_confirmation import IndexSnapshot
+
+        return tuple(
+            IndexSnapshot(
+                token=str(row[0]),
+                exchange_at=datetime.fromisoformat(row[1]),
+                received_at=datetime.fromisoformat(row[2]),
+                sequence=int(row[3]),
+                ltp=Decimal(str(row[4])),
+            )
+            for row in rows
+        )
+
+    def load_future_snapshots(
+        self,
+        token: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple["FutureSnapshot", ...]:
+        """Load one stored future stream in chronological order."""
+
+        clauses = ["token = ?"]
+        params: list[object] = [token]
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("future start timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("future end timestamp must be timezone aware")
+            clauses.append("exchange_ts_utc <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("future load range invalid")
+
+        try:
+            rows = self._connection.execute(
+                "SELECT token, exchange_ts_utc, received_ts_utc, sequence, ltp, "
+                "open_interest, volume, total_buy_quantity, total_sell_quantity, "
+                "best_bid_price, best_bid_quantity, best_ask_price, best_ask_quantity, "
+                "depth_buy_quantity, depth_sell_quantity "
+                "FROM future_snapshots WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY exchange_ts_utc ASC, sequence ASC",
+                params,
+            ).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite future snapshot read failed") from None
+
+        from intrader.market_confirmation import FutureSnapshot
+
+        return tuple(
+            FutureSnapshot(
+                token=str(row[0]),
+                exchange_at=datetime.fromisoformat(row[1]),
+                received_at=datetime.fromisoformat(row[2]),
+                sequence=int(row[3]),
+                ltp=Decimal(str(row[4])),
+                open_interest=int(row[5]),
+                volume=int(row[6]),
+                total_buy_quantity=Decimal(str(row[7])),
+                total_sell_quantity=Decimal(str(row[8])),
+                best_bid_price=None if row[9] is None else Decimal(str(row[9])),
+                best_bid_quantity=int(row[10]),
+                best_ask_price=None if row[11] is None else Decimal(str(row[11])),
+                best_ask_quantity=int(row[12]),
+                depth_buy_quantity=int(row[13]),
+                depth_sell_quantity=int(row[14]),
+            )
+            for row in rows
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -336,6 +475,89 @@ class SQLiteStore:
             raise StorageError("SQLite backfill write failed") from None
         return len(candle_rows), len(oi_rows)
 
+    def store_index_tick(self, instrument: Instrument, tick: MarketTick) -> bool:
+        if (
+            instrument.exchange != "NSE"
+            or tick.exchange != "NSE"
+            or tick.token != instrument.token
+            or tick.mode != 1
+        ):
+            raise StorageError("index snapshot invalid")
+        try:
+            with self._connection:
+                cursor = self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO index_snapshots
+                        (exchange, token, exchange_ts_utc, received_ts_utc, sequence, ltp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tick.exchange,
+                        tick.token,
+                        _utc_iso(tick.exchange_at),
+                        _utc_iso(tick.received_at),
+                        tick.sequence,
+                        float(tick.last_price),
+                    ),
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite index snapshot write failed") from None
+        return cursor.rowcount == 1
+
+    def store_future_tick(self, instrument: Instrument, tick: MarketTick) -> bool:
+        if (
+            instrument.exchange != "NFO"
+            or instrument.instrument_type != "FUTIDX"
+            or tick.exchange != "NFO"
+            or tick.token != instrument.token
+            or tick.mode != 3
+            or tick.open_interest is None
+            or tick.volume is None
+            or tick.total_buy_quantity is None
+            or tick.total_sell_quantity is None
+        ):
+            raise StorageError("future snapshot invalid")
+
+        best_bid = max(tick.best_5_buy, key=lambda level: level.price, default=None)
+        best_ask = min(tick.best_5_sell, key=lambda level: level.price, default=None)
+        depth_buy = sum(level.quantity for level in tick.best_5_buy)
+        depth_sell = sum(level.quantity for level in tick.best_5_sell)
+
+        try:
+            with self._connection:
+                cursor = self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO future_snapshots
+                        (exchange, token, exchange_ts_utc, received_ts_utc, sequence,
+                         ltp, open_interest, volume, total_buy_quantity,
+                         total_sell_quantity, best_bid_price, best_bid_quantity,
+                         best_ask_price, best_ask_quantity, depth_buy_quantity,
+                         depth_sell_quantity)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tick.exchange,
+                        tick.token,
+                        _utc_iso(tick.exchange_at),
+                        _utc_iso(tick.received_at),
+                        tick.sequence,
+                        float(tick.last_price),
+                        tick.open_interest,
+                        tick.volume,
+                        float(tick.total_buy_quantity),
+                        float(tick.total_sell_quantity),
+                        None if best_bid is None else float(best_bid.price),
+                        0 if best_bid is None else best_bid.quantity,
+                        None if best_ask is None else float(best_ask.price),
+                        0 if best_ask is None else best_ask.quantity,
+                        depth_buy,
+                        depth_sell,
+                    ),
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite future snapshot write failed") from None
+        return cursor.rowcount == 1
+
     def store_option_tick(self, instrument: Instrument, tick: MarketTick) -> bool:
         if (
             instrument.exchange != "NFO"
@@ -386,7 +608,10 @@ class SQLiteStore:
         return cursor.rowcount == 1
 
     def count(self, table: str) -> int:
-        if table not in {"candles", "oi_observations", "option_snapshots"}:
+        if table not in {
+            "candles", "oi_observations", "option_snapshots",
+            "index_snapshots", "future_snapshots",
+        }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
@@ -406,3 +631,34 @@ class OptionSnapshotSink:
         if instrument is None:
             return
         self._store.store_option_tick(instrument, tick)
+
+
+class MarketSnapshotSink:
+    """Persist the complete resolved Phase 2 market snapshot set."""
+
+    def __init__(self, store: SQLiteStore, instruments: NiftyInstruments) -> None:
+        self._store = store
+        self._spot = ("NSE", instruments.spot.token)
+        self._vix = ("NSE", instruments.vix.token)
+        self._future = ("NFO", instruments.future.token)
+        self._future_instrument = instruments.future
+        self._index_instruments = {
+            self._spot: instruments.spot,
+            self._vix: instruments.vix,
+        }
+        self._options = {
+            ("NFO", instrument.token): instrument
+            for instrument in (*instruments.calls, *instruments.puts)
+        }
+
+    def __call__(self, tick: MarketTick) -> None:
+        key = (tick.exchange, tick.token)
+        if key in self._index_instruments:
+            self._store.store_index_tick(self._index_instruments[key], tick)
+            return
+        if key == self._future:
+            self._store.store_future_tick(self._future_instrument, tick)
+            return
+        option = self._options.get(key)
+        if option is not None:
+            self._store.store_option_tick(option, tick)

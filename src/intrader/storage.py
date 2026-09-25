@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class StorageError(Exception):
@@ -125,6 +125,24 @@ class SQLiteStore:
                     ltp REAL NOT NULL CHECK(ltp > 0),
                     previous_close REAL NOT NULL CHECK(previous_close > 0),
                     PRIMARY KEY (exchange, token, exchange_ts_utc, sequence)
+                );
+
+                CREATE TABLE IF NOT EXISTS news_items (
+                    source TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    published_at_utc TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    PRIMARY KEY (source, url)
+                );
+
+                CREATE TABLE IF NOT EXISTS scheduled_events (
+                    source TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    scheduled_at_utc TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    impact TEXT NOT NULL CHECK(impact IN ('HIGH', 'MEDIUM', 'LOW')),
+                    PRIMARY KEY (source, category, scheduled_at_utc)
                 );
                 """
             )
@@ -457,6 +475,154 @@ class SQLiteStore:
             for row in rows
         )
 
+    def store_news_items(self, items) -> int:
+        rows = []
+        for item in items:
+            if item.published_at.tzinfo is None:
+                raise StorageError("news timestamp must be timezone aware")
+            rows.append(
+                (
+                    item.source,
+                    item.title,
+                    _utc_iso(item.published_at),
+                    item.url,
+                    item.category,
+                )
+            )
+        try:
+            with self._connection:
+                self._connection.executemany(
+                    """
+                    INSERT INTO news_items
+                        (source, title, published_at_utc, url, category)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(source, url) DO UPDATE SET
+                        title=excluded.title,
+                        published_at_utc=excluded.published_at_utc,
+                        category=excluded.category
+                    """,
+                    rows,
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite news write failed") from None
+        return len(rows)
+
+    def store_scheduled_events(self, events) -> int:
+        rows = []
+        for event in events:
+            if event.scheduled_at.tzinfo is None:
+                raise StorageError("event timestamp must be timezone aware")
+            rows.append(
+                (
+                    event.source,
+                    event.name,
+                    _utc_iso(event.scheduled_at),
+                    event.category,
+                    event.impact,
+                )
+            )
+        try:
+            with self._connection:
+                self._connection.executemany(
+                    """
+                    INSERT INTO scheduled_events
+                        (source, name, scheduled_at_utc, category, impact)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(source, category, scheduled_at_utc) DO UPDATE SET
+                        name=excluded.name,
+                        impact=excluded.impact
+                    """,
+                    rows,
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite event write failed") from None
+        return len(rows)
+
+    def load_news_items(
+        self,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ):
+        clauses: list[str] = []
+        params: list[object] = []
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("news start timestamp must be timezone aware")
+            clauses.append("published_at_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("news end timestamp must be timezone aware")
+            clauses.append("published_at_utc <= ?")
+            params.append(_utc_iso(end))
+        query = (
+            "SELECT source, title, published_at_utc, url, category FROM news_items"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY published_at_utc DESC"
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite news read failed") from None
+
+        from intrader.context import NewsItem
+
+        return tuple(
+            NewsItem(
+                source=str(row[0]),
+                title=str(row[1]),
+                published_at=datetime.fromisoformat(row[2]),
+                url=str(row[3]),
+                category=str(row[4]),
+            )
+            for row in rows
+        )
+
+    def load_scheduled_events(
+        self,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ):
+        clauses: list[str] = []
+        params: list[object] = []
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("event start timestamp must be timezone aware")
+            clauses.append("scheduled_at_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("event end timestamp must be timezone aware")
+            clauses.append("scheduled_at_utc <= ?")
+            params.append(_utc_iso(end))
+        query = (
+            "SELECT source, name, scheduled_at_utc, category, impact "
+            "FROM scheduled_events"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY scheduled_at_utc ASC"
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite event read failed") from None
+
+        from intrader.context import ScheduledEvent
+
+        return tuple(
+            ScheduledEvent(
+                source=str(row[0]),
+                name=str(row[1]),
+                scheduled_at=datetime.fromisoformat(row[2]),
+                category=str(row[3]),
+                impact=str(row[4]),
+            )
+            for row in rows
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -712,6 +878,7 @@ class SQLiteStore:
         if table not in {
             "candles", "oi_observations", "option_snapshots",
             "index_snapshots", "future_snapshots", "breadth_snapshots",
+            "news_items", "scheduled_events",
         }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

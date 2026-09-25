@@ -13,7 +13,7 @@ import websocket
 from intrader.auth import SmartSession
 from intrader.feed_health import FeedHealth, HealthSnapshot
 from intrader.instruments import NiftyInstruments
-from intrader.stream_protocol import InvalidPacket, decode_tick, subscription_messages
+from intrader.stream_protocol import (\n    InvalidPacket,\n    breadth_subscription_message,\n    decode_tick,\n    subscription_messages,\n)
 
 
 STREAM_URL = "wss://smartapisocket.angelone.in/smart-stream"
@@ -58,6 +58,18 @@ class LiveFeed:
             except Exception:
                 self._health.on_disconnected()
                 socket.close()
+                return
+
+            if self._breadth_tokens:
+                try:
+                    socket.send(
+                        json.dumps(
+                            breadth_subscription_message(self._breadth_tokens)
+                        )
+                    )
+                except Exception:
+                    # Breadth is optional confirmation and must not break core feed.
+                    pass
 
         def on_data(_socket, data, data_type, _continue_flag) -> None:
             if data_type != websocket.ABNF.OPCODE_BINARY:

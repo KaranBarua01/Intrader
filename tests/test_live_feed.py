@@ -117,7 +117,7 @@ def test_probe_is_bounded_and_reports_no_trade_without_fresh_ticks() -> None:
     assert snapshot.expected_count == 5
 
 
-def test_cli_live_probe_reports_no_trade_without_exposing_tokens(monkeypatch, capsys) -> None:
+def test_cli_live_probe_reports_no_trade_without_exposing_tokens(tmp_path, monkeypatch, capsys) -> None:\n    monkeypatch.chdir(tmp_path)
     bundle = _bundle()
     monkeypatch.setattr(
         "intrader.__main__.check_market_access",

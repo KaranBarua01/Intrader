@@ -139,6 +139,7 @@ class TimeTravelPage(QWidget):
         super().__init__()
         self._decisions = ()
         self._bundles = ()
+        self._news = ()
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
@@ -189,6 +190,10 @@ class TimeTravelPage(QWidget):
         outcome_card = Card("WHAT HAPPENED NEXT")
         outcome_card.add_widget(self.forward_table)
         side.addWidget(outcome_card)
+        self.news_table = DataTable(["Time", "Source", "Global context"])
+        news_card = Card("GLOBAL NEWS AT THIS TIME")
+        news_card.add_widget(self.news_table)
+        side.addWidget(news_card, 1)
         body.addLayout(side, 2)
         root.addLayout(body, 1)
 
@@ -215,9 +220,10 @@ class TimeTravelPage(QWidget):
         qt = self.end_time.time()
         return datetime(qd.year(), qd.month(), qd.day(), qt.hour(), qt.minute(), tzinfo=INDIA_TIME)
 
-    def set_session_data(self, decisions, bundles, candles) -> None:
+    def set_session_data(self, decisions, bundles, candles, news=()) -> None:
         self._decisions = tuple(decisions)
         self._bundles = tuple(bundles)
+        self._news = tuple(news)
         end = self.selected_end_datetime()
         start = end - timedelta(minutes=30)
         window = tuple(c for c in candles if start <= c.at.astimezone(INDIA_TIME) <= end)
@@ -251,6 +257,20 @@ class TimeTravelPage(QWidget):
         end = self.selected_end_datetime()
         selected = end - timedelta(minutes=(30 - value))
         self.position.setText(selected.strftime("%H:%M"))
+        visible_news = [
+            item for item in self._news
+            if selected - timedelta(minutes=10)
+            <= item.published_at.astimezone(INDIA_TIME)
+            <= selected
+        ]
+        self.news_table.set_rows([
+            [
+                item.published_at.astimezone(INDIA_TIME).strftime("%H:%M"),
+                item.source,
+                item.title,
+            ]
+            for item in visible_news[:10]
+        ])
         eligible = [d for d in self._decisions if d.decided_at.astimezone(INDIA_TIME) <= selected]
         decision = eligible[-1] if eligible else None
         if decision is None:

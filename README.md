@@ -154,3 +154,97 @@ When sufficient stored data exists, the read-only diagnostic is:
 ```
 
 This command prints measurements only. Direction scoring and trade-state decisions are intentionally deferred to later Market Brain checkpoints.
+
+
+## Phase 2 — Market Brain implementation
+
+All five Phase 2 checkpoints are implemented on `intrader-phase2`. Full Python 3.11 regression verification must be completed locally before Phase 2 is treated as release-ready.
+
+### Checkpoint 2 — Options Intelligence
+
+The local options engine uses the stored nearest-expiry ATM +/-4 CE/PE snapshots and calculates:
+
+- 5-minute LTP, OI and volume changes
+- contract-level LONG_BUILDUP / SHORT_BUILDUP / SHORT_COVERING / LONG_UNWINDING labels
+- OI PCR and volume PCR
+- maximum CE/PE OI strikes
+- maximum positive OI-change strikes
+- OI concentration
+
+Diagnostic:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader options-intelligence YYYY-MM-DD HH:MM
+```
+
+### Checkpoint 3 — Futures, VIX, Order Flow and Breadth
+
+The SmartAPI SNAP_QUOTE decoder now uses the full 379-byte packet and captures:
+
+- nearest-future LTP, OI and volume
+- total buy/sell quantities
+- five-level bid/ask depth
+- best bid/ask and spread
+- spot/future basis and basis change
+- India VIX change
+- futures buildup
+
+NIFTY 50 breadth is optional confirmation. Membership comes from the official NIFTY Indices constituent CSV and constituents are resolved to exact Angel One NSE `-EQ` tokens. Constituent QUOTE subscriptions provide current price and previous close.
+
+Public constituent weights are not guessed. Weighted breadth remains unavailable unless a verified official weight source is added.
+
+Diagnostics:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader market-confirmation YYYY-MM-DD HH:MM
+.\.venv\Scripts\python.exe -m intrader breadth YYYY-MM-DD HH:MM
+```
+
+### Checkpoint 4 — News and scheduled events
+
+The context layer is non-directional and caches independent public sources in SQLite:
+
+- RBI official press-release RSS
+- BLS official release calendar
+- Federal Reserve FOMC calendar
+
+A failed source does not erase cached data from the other sources.
+
+Diagnostic:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader context YYYY-MM-DD HH:MM
+```
+
+### Checkpoint 5 — Market Brain
+
+The final Market Brain combines five independent directional families:
+
+| Family | Maximum direction weight |
+| --- | ---: |
+| Price structure | 30 |
+| Futures | 25 |
+| Options | 20 |
+| Breadth | 15 |
+| Order flow | 10 |
+
+Correlated indicators are combined inside their family before the family contributes to the overall Direction score.
+
+Final outputs:
+
+- Direction: -100 to +100
+- Entry Quality: 0 to 100
+- Reversal / Chase Risk: 0 to 100
+- Confidence: 0 to 100
+- Family Coverage: 0 to 100
+- advisory state: `BULLISH SETUP`, `BEARISH SETUP`, `WAIT`, or `NO TRADE`
+
+Initial state thresholds are intentionally uncalibrated engineering defaults for shadow testing. They are not claims of profitability and must be calibrated later from tracked outcomes.
+
+Diagnostic:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader market-brain YYYY-MM-DD HH:MM
+```
+
+Intrader still contains no broker order-placement, order-modification, order-cancellation or GTT execution path. All actual execution remains manual on the user's phone.

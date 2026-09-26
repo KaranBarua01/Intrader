@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from intrader.ui.components import TriangleDockButton
 from intrader.ui.data_service import DesktopDataService
 from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
@@ -77,9 +78,9 @@ class MainWindow(QMainWindow):
 
         top = QFrame()
         top.setObjectName("TopBar")
-        top.setFixedHeight(52)
+        top.setFixedHeight(48)
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(14, 7, 14, 7)
+        top_layout.setContentsMargins(12, 6, 12, 6)
         top_layout.setSpacing(8)
 
         logo = QLabel("INTRADER")
@@ -214,9 +215,7 @@ class MainWindow(QMainWindow):
         dock_layout.addWidget(version)
         self.bottom_dock.hide()
 
-        self.dock_handle = QPushButton("⌃", central)
-        self.dock_handle.setObjectName("DockHandle")
-        self.dock_handle.setToolTip("Open navigation dock")
+        self.dock_handle = TriangleDockButton(central)
         self.dock_handle.clicked.connect(self.toggle_bottom_dock)
 
         self.time_page.load_button.clicked.connect(self.load_time_travel)
@@ -256,22 +255,30 @@ class MainWindow(QMainWindow):
         dock_width = min(max(680, int(width * 0.72)), max(680, width - 24))
         if width < 760:
             dock_width = max(520, width - 16)
-        dock_height = 64
+        dock_height = 60
         dock_x = max(8, (width - dock_width) // 2)
-        dock_y = max(52, height - dock_height - 14)
+        dock_y = max(48, height - dock_height - 12)
         self.bottom_dock.setGeometry(dock_x, dock_y, dock_width, dock_height)
-        handle_y = dock_y - 12 if self._dock_visible else max(52, height - 29)
-        self.dock_handle.setGeometry(max(8, (width - 46) // 2), handle_y, 46, 22)
+        handle_width = self.dock_handle.width()
+        handle_height = self.dock_handle.height()
+        handle_y = (
+            dock_y - handle_height + 8
+            if self._dock_visible
+            else max(48, height - handle_height - 3)
+        )
+        self.dock_handle.setGeometry(
+            max(8, (width - handle_width) // 2),
+            handle_y,
+            handle_width,
+            handle_height,
+        )
         self.bottom_dock.raise_()
         self.dock_handle.raise_()
 
     def toggle_bottom_dock(self) -> None:
         self._dock_visible = not self._dock_visible
         self.bottom_dock.setVisible(self._dock_visible)
-        self.dock_handle.setText("⌄" if self._dock_visible else "⌃")
-        self.dock_handle.setToolTip(
-            "Hide navigation dock" if self._dock_visible else "Open navigation dock"
-        )
+        self.dock_handle.set_dock_open(self._dock_visible)
         self._position_bottom_navigation()
 
     def apply_theme(self, name: str) -> None:

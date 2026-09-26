@@ -6,6 +6,7 @@ on:
       - intrader-phase1
       - intrader-phase2
       - intrader-phase3
+      - intrader-phase4
       - main
   pull_request:
     branches:

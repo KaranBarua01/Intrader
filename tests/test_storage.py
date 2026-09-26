@@ -7,6 +7,7 @@ import pytest
 from intrader.historical import Candle, OIObservation
 from intrader.instruments import Instrument, NiftyInstruments
 from intrader.market_brain import FamilyEvidence
+from intrader.outcomes import ShadowOutcome
 from intrader.records import DecisionReason, DecisionRecord
 from intrader.shadow import ShadowTrade
 from intrader.storage import MarketSnapshotSink, OptionSnapshotSink, SQLiteStore, StorageError
@@ -56,7 +57,7 @@ def test_schema_initializes_twice_with_wal_and_reopens(tmp_path) -> None:
     store.initialize()
 
     assert store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 7
     store.store_candles(_bundle().spot, "ONE_MINUTE", [_candle()])
     store.close()
 
@@ -395,5 +396,69 @@ def test_shadow_trade_entry_is_idempotent_and_immutable(tmp_path) -> None:
             store._connection.execute(
                 "UPDATE shadow_trades SET entry_price = 999 "
                 "WHERE trade_id = ?",
+                (trade.trade_id,),
+            )
+
+
+
+def test_shadow_outcome_is_idempotent_and_immutable(tmp_path) -> None:
+    decision = _decision_record()
+    trade = ShadowTrade(
+        trade_id="SHD-OUTCOME-1",
+        decision_id=decision.decision_id,
+        shadow_version="shadow-v0.1",
+        opened_at=NOW,
+        action="BUY_CALL",
+        token="call",
+        strike=Decimal("23150"),
+        option_type="CE",
+        entry_price=Decimal("100"),
+        quantity=65,
+        lot_size=65,
+        lots=1,
+        stop_price=Decimal("80"),
+        target_price=Decimal("130"),
+        max_minutes=30,
+    )
+    outcome = ShadowOutcome(
+        trade_id=trade.trade_id,
+        evaluated_at=NOW + timedelta(minutes=5),
+        exit_at=NOW + timedelta(minutes=5),
+        exit_reason="TARGET",
+        exit_price=Decimal("131"),
+        gross_pnl=Decimal("2015"),
+        estimated_friction=Decimal("7.51"),
+        adjusted_pnl=Decimal("2007.49"),
+        gross_return_pct=Decimal("31"),
+        adjusted_return_pct=Decimal("30.88"),
+        mfe_price=Decimal("31"),
+        mae_price=Decimal("-5"),
+        mfe_amount=Decimal("2015"),
+        mae_amount=Decimal("-325"),
+        spot_exit=Decimal("23190"),
+        spot_change=Decimal("40"),
+        directional_spot_change=Decimal("40"),
+        forward_returns=(
+            (1, Decimal("-5")),
+            (3, Decimal("10")),
+            (5, Decimal("31")),
+            (10, None),
+            (15, None),
+            (30, None),
+        ),
+    )
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        store.store_decision_record(decision)
+        store.store_shadow_trade(trade)
+        assert store.store_shadow_outcome(outcome) is True
+        assert store.store_shadow_outcome(outcome) is False
+        assert store.count("shadow_outcomes") == 1
+        assert store.load_shadow_outcome(trade.trade_id) == outcome
+        assert store.load_unsettled_shadow_trades() == ()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            store._connection.execute(
+                "UPDATE shadow_outcomes SET gross_pnl = 0 WHERE trade_id = ?",
                 (trade.trade_id,),
             )

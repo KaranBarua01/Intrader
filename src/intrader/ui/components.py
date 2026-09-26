@@ -303,6 +303,7 @@ class MarketChart(Card):
         self.candles = CandlestickItem()
         self.plot.addItem(self.candles)
         self.layout_box.addWidget(self.plot)
+        self.set_empty_message("No market data loaded.")
 
     def set_candles(self, rows: list[tuple[float, float, float, float, float]]) -> None:
         self.plot.clear()

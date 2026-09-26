@@ -503,6 +503,56 @@ class SQLiteStore:
             end=end,
         )
 
+    def count_time_range_rows(
+        self,
+        table: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> int:
+        """Count rows in a supported timestamped table without resolving a token."""
+
+        timestamp_columns = {
+            "candles": "ts_utc",
+            "option_snapshots": "exchange_ts_utc",
+            "index_snapshots": "exchange_ts_utc",
+            "future_snapshots": "exchange_ts_utc",
+            "breadth_snapshots": "exchange_ts_utc",
+            "news_items": "published_at_utc",
+            "scheduled_events": "scheduled_at_utc",
+            "decision_records": "decided_at_utc",
+            "shadow_trades": "opened_at_utc",
+            "shadow_outcomes": "settled_at_utc",
+            "reason_audits": "audited_at_utc",
+        }
+        timestamp_column = timestamp_columns.get(table)
+        if timestamp_column is None:
+            raise StorageError(f"unsupported time-range count table: {table}")
+
+        clauses: list[str] = []
+        params: list[object] = []
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("count start timestamp must be timezone aware")
+            clauses.append(f"{timestamp_column} >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("count end timestamp must be timezone aware")
+            clauses.append(f"{timestamp_column} <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("time-range count invalid")
+
+        query = f"SELECT COUNT(*) FROM {table}"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        try:
+            row = self._connection.execute(query, params).fetchone()
+        except sqlite3.Error:
+            raise StorageError(f"SQLite time-range count failed for {table}") from None
+        return 0 if row is None else int(row[0])
+
     def load_option_snapshots(
         self,
         *,

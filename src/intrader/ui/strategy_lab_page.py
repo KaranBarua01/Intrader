@@ -8,20 +8,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QDate, QTime, Signal
+from PySide6.QtCore import QDate, QTime, Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QTimeEdit,
-    QVBoxLayout,
-    QWidget,
+    QComboBox, QDateEdit, QHBoxLayout, QLabel, QPushButton, QSplitter,
+    QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from intrader.historical import INDIA_TIME
-from intrader.ui.components import Card, DataTable, MetricCard
+from intrader.ui.components import (
+    Card, DataTable, MetricCard, ResponsiveMetricGrid, TextPanel,
+)
 
 
 def _fmt_pct(value) -> str:
@@ -34,6 +30,7 @@ def _fmt(value) -> str:
 
 class StrategyLabPage(QWidget):
     analyze_requested = Signal()
+    enrich_requested = Signal()
     replay_requested = Signal(object)
 
     def __init__(self) -> None:
@@ -43,15 +40,13 @@ class StrategyLabPage(QWidget):
         self._visible_occurrences = ()
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 34)
+        root.setSpacing(8)
 
         header = QHBoxLayout()
         title = QLabel("Strategy Lab")
         title.setObjectName("PageTitle")
         header.addWidget(title)
-        header.addSpacing(12)
-
         badge = QLabel("LAB ONLY — NOT USED BY INTRADER MODE")
         badge.setStyleSheet(
             "background:#fff4dc;color:#8a641e;border-radius:9px;"
@@ -62,9 +57,8 @@ class StrategyLabPage(QWidget):
         root.addLayout(header)
 
         explainer = QLabel(
-            "Tests isolated book-inspired hypotheses against Time Travel candle "
-            "history. A strategy must survive larger samples and untouched "
-            "validation before it can ever become an Intrader candidate."
+            "Tests isolated book-inspired hypotheses against local Time Travel history. "
+            "Use Fetch Missing only when you explicitly want network enrichment."
         )
         explainer.setWordWrap(True)
         explainer.setObjectName("Muted")
@@ -78,7 +72,6 @@ class StrategyLabPage(QWidget):
         self.from_time.setDisplayFormat("HH:mm")
         controls.addWidget(self.from_day)
         controls.addWidget(self.from_time)
-
         controls.addWidget(QLabel("To"))
         self.to_day = QDateEdit(QDate.currentDate())
         self.to_day.setCalendarPopup(True)
@@ -103,114 +96,134 @@ class StrategyLabPage(QWidget):
         self.analyze_button = QPushButton("Analyze Strategies")
         self.analyze_button.setObjectName("PrimaryButton")
         controls.addWidget(self.analyze_button)
+
+        self.fetch_button = QPushButton("Fetch Missing")
+        self.fetch_button.setToolTip(
+            "Explicit opt-in network enrichment. Strategy analysis itself is read-only."
+        )
+        controls.addWidget(self.fetch_button)
         controls.addStretch(1)
         root.addLayout(controls)
 
-        metrics = QHBoxLayout()
         self.total_signals = MetricCard("TOTAL SIGNALS", "0")
-        self.active_strategies = MetricCard("STRATEGIES WITH SIGNALS", "0")
-        self.best_hit = MetricCard("HIGHEST OBSERVED 30M HIT", "N/A")
+        self.active_strategies = MetricCard("ACTIVE STRATEGIES", "0")
+        self.best_hit = MetricCard("HIGHEST 30M HIT", "N/A")
         self.sessions = MetricCard("SESSIONS", "0")
         self.candles = MetricCard("CANDLES TESTED", "0")
-        for card in (
-            self.total_signals,
-            self.active_strategies,
-            self.best_hit,
-            self.sessions,
-            self.candles,
-        ):
-            metrics.addWidget(card)
-        root.addLayout(metrics)
+        self.metrics = ResponsiveMetricGrid(
+            [
+                self.total_signals,
+                self.active_strategies,
+                self.best_hit,
+                self.sessions,
+                self.candles,
+            ],
+            compact_height=74,
+        )
+        root.addWidget(self.metrics)
 
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         self.strategy_table = DataTable(
             [
                 "Source",
                 "Strategy",
-                "Signals",
+                "n",
                 "Bull",
                 "Bear",
-                "5m Hit",
-                "15m Hit",
-                "30m Hit",
-                "Avg 30m",
-                "MFE 30m",
-                "MAE 30m",
+                "5m",
+                "15m",
+                "30m",
+                "Avg30",
+                "MFE",
+                "MAE",
                 "Sample",
             ]
         )
         strategy_card = Card("STRATEGY PERFORMANCE")
         strategy_card.add_widget(self.strategy_table)
-        root.addWidget(strategy_card, 2)
+        left_layout.addWidget(strategy_card, 1)
+        self.main_splitter.addWidget(left)
 
-        lower = QHBoxLayout()
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        self.detail_tabs = QTabWidget()
+        self.strategy_detail = TextPanel(
+            "HYPOTHESIS",
+            "Select a strategy to inspect its definition and sample status.",
+        )
+        self.notes = TextPanel(
+            "INTERPRETATION",
+            "Run Strategy Lab to populate research guardrails.",
+        )
+        self.detail_tabs.addTab(self.strategy_detail, "Hypothesis")
+        self.detail_tabs.addTab(self.notes, "Interpretation")
+        right_layout.addWidget(self.detail_tabs)
+        self.main_splitter.addWidget(right)
+        self.main_splitter.setStretchFactor(0, 7)
+        self.main_splitter.setStretchFactor(1, 3)
+        root.addWidget(self.main_splitter, 2)
+
         self.occurrence_table = DataTable(
-            [
-                "Time",
-                "Direction",
-                "Entry",
-                "Regime",
-                "5m",
-                "15m",
-                "30m",
-                "MFE",
-                "MAE",
-            ]
+            ["Time", "Dir", "Entry", "Regime", "5m", "15m", "30m", "MFE", "MAE"]
         )
         occurrence_card = Card(
             "OCCURRENCES — DOUBLE-CLICK TO OPEN IN TIME TRAVEL"
         )
         occurrence_card.add_widget(self.occurrence_table)
-        lower.addWidget(occurrence_card, 3)
-
-        notes_side = QVBoxLayout()
-        self.strategy_detail = DataTable(["Selected strategy"])
-        detail_card = Card("HYPOTHESIS")
-        detail_card.add_widget(self.strategy_detail)
-        notes_side.addWidget(detail_card)
-
-        self.notes = DataTable(["RESEARCH GUARDRAILS"])
-        notes_card = Card("INTERPRETATION")
-        notes_card.add_widget(self.notes)
-        notes_side.addWidget(notes_card, 1)
-        lower.addLayout(notes_side, 2)
-        root.addLayout(lower, 2)
+        root.addWidget(occurrence_card, 2)
 
         self.analyze_button.clicked.connect(self.analyze_requested.emit)
+        self.fetch_button.clicked.connect(self.enrich_requested.emit)
         self.source_filter.currentTextChanged.connect(
             lambda _text: self._render_strategy_table()
         )
         self.strategy_table.currentCellChanged.connect(
             self._strategy_selection_changed
         )
-        self.occurrence_table.cellDoubleClicked.connect(
-            self._open_occurrence
-        )
+        self.occurrence_table.cellDoubleClicked.connect(self._open_occurrence)
         self.preset_5d.clicked.connect(lambda: self._set_preset(5))
         self.preset_10d.clicked.connect(lambda: self._set_preset(10))
         self.preset_30d.clicked.connect(lambda: self._set_preset(30))
+
+    def resizeEvent(self, event) -> None:
+        self.main_splitter.setOrientation(
+            Qt.Orientation.Vertical
+            if event.size().width() < 1000
+            else Qt.Orientation.Horizontal
+        )
+        super().resizeEvent(event)
+
+    def apply_layout_preset(self, preset: str) -> None:
+        width = max(1, self.width())
+        if preset == "Analysis":
+            self.main_splitter.setSizes([int(width * 0.78), int(width * 0.22)])
+        elif preset == "Monitoring":
+            self.main_splitter.setSizes([int(width * 0.62), int(width * 0.38)])
+        elif preset == "Compact":
+            self.main_splitter.setSizes([int(width * 0.75), int(width * 0.25)])
+        else:
+            self.main_splitter.setSizes([int(width * 0.70), int(width * 0.30)])
 
     def selected_range(self) -> tuple[datetime, datetime]:
         fd = self.from_day.date()
         ft = self.from_time.time()
         td = self.to_day.date()
         tt = self.to_time.time()
-        start = datetime(
-            fd.year(),
-            fd.month(),
-            fd.day(),
-            ft.hour(),
-            ft.minute(),
-            tzinfo=INDIA_TIME,
+        return (
+            datetime(
+                fd.year(), fd.month(), fd.day(),
+                ft.hour(), ft.minute(), tzinfo=INDIA_TIME
+            ),
+            datetime(
+                td.year(), td.month(), td.day(),
+                tt.hour(), tt.minute(), tzinfo=INDIA_TIME
+            ),
         )
-        end = datetime(
-            td.year(),
-            td.month(),
-            td.day(),
-            tt.hour(),
-            tt.minute(),
-            tzinfo=INDIA_TIME,
-        )
-        return start, end
 
     def _set_preset(self, days: int) -> None:
         now = datetime.now(INDIA_TIME)
@@ -234,51 +247,51 @@ class StrategyLabPage(QWidget):
             if strategy.hit_rate_30m is not None
         ]
         self.best_hit.set_value(
-            "N/A"
-            if not available_hits
-            else f"{max(available_hits):.2f}%"
+            "N/A" if not available_hits else f"{max(available_hits):.2f}%",
+            subtitle="observed; sample size matters",
         )
-        self.sessions.set_value(str(snapshot.session_count))
+        self.sessions.set_value(
+            str(snapshot.session_count), subtitle="unique trading dates"
+        )
         self.candles.set_value(str(snapshot.candle_count))
-        self.notes.set_rows([[note] for note in snapshot.notes])
+        self.notes.set_text(list(snapshot.notes))
         self._render_strategy_table()
 
     def _source_matches(self, source: str) -> bool:
         selected = self.source_filter.currentText()
-        if selected == "All":
-            return True
-        return selected in source
+        return selected == "All" or selected in source
 
     def _render_strategy_table(self) -> None:
         if self._snapshot is None:
             self._visible_strategies = ()
-            self.strategy_table.set_rows([])
+            self.strategy_table.set_rows([
+                ["—", "Run analysis to populate Strategy Lab.", 0, 0, 0, "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "NO DATA"]
+            ])
             self.occurrence_table.set_rows([])
             return
+
         self._visible_strategies = tuple(
             strategy
             for strategy in self._snapshot.strategies
             if self._source_matches(strategy.definition.source)
         )
-        self.strategy_table.set_rows(
+        self.strategy_table.set_rows([
             [
-                [
-                    strategy.definition.source,
-                    strategy.definition.name,
-                    strategy.signals,
-                    strategy.bullish_signals,
-                    strategy.bearish_signals,
-                    _fmt_pct(strategy.hit_rate_5m),
-                    _fmt_pct(strategy.hit_rate_15m),
-                    _fmt_pct(strategy.hit_rate_30m),
-                    _fmt(strategy.avg_return_30m),
-                    _fmt(strategy.avg_mfe_30m),
-                    _fmt(strategy.avg_mae_30m),
-                    strategy.sample_label,
-                ]
-                for strategy in self._visible_strategies
+                strategy.definition.source,
+                strategy.definition.name,
+                strategy.signals,
+                strategy.bullish_signals,
+                strategy.bearish_signals,
+                _fmt_pct(strategy.hit_rate_5m),
+                _fmt_pct(strategy.hit_rate_15m),
+                _fmt_pct(strategy.hit_rate_30m),
+                _fmt(strategy.avg_return_30m),
+                _fmt(strategy.avg_mfe_30m),
+                _fmt(strategy.avg_mae_30m),
+                strategy.sample_label,
             ]
-        )
+            for strategy in self._visible_strategies
+        ])
         if self._visible_strategies:
             self.strategy_table.selectRow(0)
             self._show_strategy(0)
@@ -296,39 +309,38 @@ class StrategyLabPage(QWidget):
 
     def _show_strategy(self, row: int) -> None:
         if row < 0 or row >= len(self._visible_strategies):
-            self.strategy_detail.set_rows([])
-            self.occurrence_table.set_rows([])
+            self.strategy_detail.set_text(
+                "No strategy is selected for the current filter."
+            )
+            self.occurrence_table.set_rows([
+                ["—", "—", "—", "—", "N/A", "N/A", "N/A", "N/A", "N/A"]
+            ])
             self._visible_occurrences = ()
             return
+
         strategy = self._visible_strategies[row]
         definition = strategy.definition
-        self.strategy_detail.set_rows(
-            [
-                [f"{definition.name} — {definition.source}"],
-                [definition.description],
-                [f"Direction scope: {definition.direction_scope}"],
-                [f"Sample status: {strategy.sample_label}"],
-            ]
-        )
+        self.strategy_detail.set_text([
+            f"<b>{definition.name}</b> — {definition.source}",
+            definition.description,
+            f"Direction scope: {definition.direction_scope}",
+            f"Sample status: {strategy.sample_label} • n={strategy.signals}",
+        ])
         self._visible_occurrences = strategy.occurrences
-        self.occurrence_table.set_rows(
+        self.occurrence_table.set_rows([
             [
-                [
-                    item.at.astimezone(INDIA_TIME).strftime(
-                        "%Y-%m-%d %H:%M"
-                    ),
-                    "BULLISH" if item.direction > 0 else "BEARISH",
-                    item.entry_price,
-                    item.regime or "N/A",
-                    _fmt(item.return_5m),
-                    _fmt(item.return_15m),
-                    _fmt(item.return_30m),
-                    _fmt(item.mfe_30m),
-                    _fmt(item.mae_30m),
-                ]
-                for item in self._visible_occurrences
+                item.at.astimezone(INDIA_TIME).strftime("%Y-%m-%d %H:%M"),
+                "BULL" if item.direction > 0 else "BEAR",
+                item.entry_price,
+                item.regime or "N/A",
+                _fmt(item.return_5m),
+                _fmt(item.return_15m),
+                _fmt(item.return_30m),
+                _fmt(item.mfe_30m),
+                _fmt(item.mae_30m),
             ]
-        )
+            for item in self._visible_occurrences
+        ] or [["—", "—", "—", "—", "N/A", "N/A", "N/A", "N/A", "N/A"]])
 
     def _open_occurrence(self, row: int, _column: int) -> None:
         if row < 0 or row >= len(self._visible_occurrences):

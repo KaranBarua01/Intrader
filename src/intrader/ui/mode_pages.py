@@ -8,12 +8,15 @@ from decimal import Decimal
 from PySide6.QtCore import QDate, QTime, QTimer, Qt
 from PySide6.QtWidgets import (
     QDateEdit, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSlider,
-    QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
+    QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
 )
 import pyqtgraph as pg
 
 from intrader.historical import INDIA_TIME
-from intrader.ui.components import Card, DataTable, DecisionCard, MarketChart, MetricCard, ReasonList
+from intrader.ui.components import (
+    Card, DataTable, DecisionCard, MarketChart, MetricCard, ReasonList,
+    ResponsiveMetricGrid, TextPanel,
+)
 
 
 def _tone(value: Decimal | None) -> str:
@@ -26,12 +29,25 @@ def _text(value) -> str:
     return "N/A" if value is None else str(value)
 
 
+def _chart_rows(candles) -> list[tuple[float, float, float, float, float]]:
+    return [
+        (
+            c.at.timestamp(),
+            float(c.open),
+            float(c.close),
+            float(c.low),
+            float(c.high),
+        )
+        for c in candles
+    ]
+
+
 class IntraderModePage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 34)
+        root.setSpacing(8)
 
         title_row = QHBoxLayout()
         title = QLabel("Intrader Mode")
@@ -43,91 +59,152 @@ class IntraderModePage(QWidget):
         title_row.addWidget(self.session_label)
         root.addLayout(title_row)
 
-        top = QHBoxLayout()
         self.decision = DecisionCard()
-        top.addWidget(self.decision, 2)
         self.direction = MetricCard("DIRECTION", "N/A")
         self.confidence = MetricCard("CONFIDENCE", "N/A")
         self.entry = MetricCard("ENTRY QUALITY", "N/A")
         self.risk = MetricCard("REVERSAL RISK", "N/A")
         self.regime = MetricCard("REGIME", "N/A")
-        for card in (self.direction, self.confidence, self.entry, self.risk, self.regime):
-            top.addWidget(card, 1)
+
+        top = QHBoxLayout()
+        top.addWidget(self.decision, 2)
+        self.metrics = ResponsiveMetricGrid(
+            [self.direction, self.confidence, self.entry, self.risk, self.regime],
+            compact_height=76,
+        )
+        top.addWidget(self.metrics, 5)
         root.addLayout(top)
 
-        middle = QHBoxLayout()
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.chart = MarketChart()
-        self.chart.setMinimumHeight(390)
-        middle.addWidget(self.chart, 3)
+        self.chart.setMinimumHeight(330)
+        self.main_splitter.addWidget(self.chart)
 
-        right = QVBoxLayout()
+        right_widget = QWidget()
+        right = QVBoxLayout(right_widget)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(8)
         self.shadow = Card("SHADOW TRADE")
         self.shadow_text = QLabel("No active shadow position.")
         self.shadow_text.setWordWrap(True)
         self.shadow.add_widget(self.shadow_text)
         right.addWidget(self.shadow)
+
         self.news = Card("GLOBAL NEWS / EVENTS")
         self.news_table = DataTable(["Time", "Source", "Headline / Event"])
-        self.news_table.setMaximumHeight(210)
         self.news.add_widget(self.news_table)
         right.addWidget(self.news, 1)
-        middle.addLayout(right, 2)
-        root.addLayout(middle, 1)
+        self.main_splitter.addWidget(right_widget)
+        self.main_splitter.setStretchFactor(0, 7)
+        self.main_splitter.setStretchFactor(1, 3)
+        root.addWidget(self.main_splitter, 1)
 
-        reasoning = QHBoxLayout()
+        self.reason_tabs = QTabWidget()
         self.why = ReasonList("WHY THIS ACTION")
         self.why_not = ReasonList("WHY NOT THE OPPOSITE")
-        reasoning.addWidget(self.why)
-        reasoning.addWidget(self.why_not)
-        root.addLayout(reasoning)
+        self.reason_tabs.addTab(self.why, "Why this action")
+        self.reason_tabs.addTab(self.why_not, "Why not the opposite")
+        self.reason_tabs.setMaximumHeight(190)
+        root.addWidget(self.reason_tabs)
+
+    def resizeEvent(self, event) -> None:
+        self.main_splitter.setOrientation(
+            Qt.Orientation.Vertical
+            if event.size().width() < 1000
+            else Qt.Orientation.Horizontal
+        )
+        super().resizeEvent(event)
+
+    def apply_layout_preset(self, preset: str) -> None:
+        width = max(1, self.width())
+        if preset == "Analysis":
+            self.main_splitter.setSizes([int(width * 0.80), int(width * 0.20)])
+            self.reason_tabs.setMaximumHeight(150)
+        elif preset == "Monitoring":
+            self.main_splitter.setSizes([int(width * 0.58), int(width * 0.42)])
+            self.reason_tabs.setMaximumHeight(120)
+        elif preset == "Compact":
+            self.main_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
+            self.reason_tabs.setMaximumHeight(120)
+        else:
+            self.main_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
+            self.reason_tabs.setMaximumHeight(190)
 
     def refresh_snapshot(self, snapshot) -> None:
         decision = snapshot.latest_decision
         if decision is None:
-            self.decision.set_decision("WAITING FOR DATA", "No immutable Market Brain decision recorded yet.")
-            for card in (self.direction, self.confidence, self.entry, self.risk, self.regime):
+            self.decision.set_decision(
+                "WAITING FOR DATA",
+                "No immutable Market Brain decision recorded yet.",
+            )
+            for card in (
+                self.direction,
+                self.confidence,
+                self.entry,
+                self.risk,
+                self.regime,
+            ):
                 card.set_value("N/A")
             self.why.set_reasons([])
             self.why_not.set_reasons([])
         else:
-            self.decision.set_decision(decision.action, f"{decision.brain_state} • {decision.brain_version}")
-            self.direction.set_value(str(decision.direction_score), _tone(decision.direction_score))
+            self.decision.set_decision(
+                decision.action,
+                f"{decision.brain_state} • {decision.brain_version}",
+            )
+            self.direction.set_value(
+                str(decision.direction_score), _tone(decision.direction_score)
+            )
             self.confidence.set_value(str(decision.confidence))
             self.entry.set_value(str(decision.entry_quality))
-            self.risk.set_value(str(decision.reversal_risk), "negative" if decision.reversal_risk > 70 else "neutral")
+            self.risk.set_value(
+                str(decision.reversal_risk),
+                "negative" if decision.reversal_risk > 70 else "neutral",
+            )
             self.regime.set_value(decision.regime)
-            chosen = [
-                (r.reason_code, r.explanation) for r in decision.reasons if r.thesis == "CHOSEN"
-            ]
-            rejected = [
-                (r.reason_code, r.explanation) for r in decision.reasons if r.thesis == "REJECTED"
-            ]
-            self.why.set_reasons(chosen)
-            self.why_not.set_reasons(rejected)
+            self.why.set_reasons([
+                (r.reason_code, r.explanation)
+                for r in decision.reasons
+                if r.thesis == "CHOSEN"
+            ])
+            self.why_not.set_reasons([
+                (r.reason_code, r.explanation)
+                for r in decision.reasons
+                if r.thesis == "REJECTED"
+            ])
 
         trade = snapshot.active_shadow_trade
         if trade is None:
-            self.shadow_text.setText("No active shadow position.")
+            self.shadow_text.setText(
+                "No active shadow position. Completed trades and P&L remain in Analysis."
+            )
         else:
             self.shadow_text.setText(
-                f"{trade.action}  •  {trade.strike} {trade.option_type}\n"
-                f"Entry  {trade.entry_price}     Stop  {trade.stop_price}\n"
-                f"Target {trade.target_price}     Qty   {trade.quantity}\n"
-                f"Version {trade.shadow_version}  •  Max {trade.max_minutes} min"
+                f"{trade.action} • {trade.strike} {trade.option_type}\n"
+                f"Entry {trade.entry_price}   Stop {trade.stop_price}\n"
+                f"Target {trade.target_price}   Qty {trade.quantity}\n"
+                f"Version {trade.shadow_version} • Max {trade.max_minutes} min"
             )
 
         rows = []
         for event in snapshot.upcoming_events[:6]:
-            rows.append([event.scheduled_at.astimezone(INDIA_TIME).strftime("%H:%M"), event.source, event.name])
+            rows.append([
+                event.scheduled_at.astimezone(INDIA_TIME).strftime("%H:%M"),
+                event.source,
+                event.name,
+            ])
         for item in snapshot.recent_news[:8]:
-            rows.append([item.published_at.astimezone(INDIA_TIME).strftime("%H:%M"), item.source, item.title])
-        self.news_table.set_rows(rows[:10])
+            rows.append([
+                item.published_at.astimezone(INDIA_TIME).strftime("%H:%M"),
+                item.source,
+                item.title,
+            ])
+        self.news_table.set_rows(
+            rows[:10] or [["—", "—", "No recent market context. Refresh when needed."]]
+        )
 
     def set_candles(self, candles) -> None:
-        rows = [
-            (float(index), float(c.open), float(c.close), float(c.low), float(c.high))
-            for index, c in enumerate(candles)
-        ]
+        rows = _chart_rows(candles)
         if rows:
             self.chart.set_candles(rows)
         else:
@@ -141,208 +218,25 @@ class TimeTravelPage(QWidget):
         self._bundles = ()
         self._news = ()
         self._key_moments = ()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
 
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 34)
+        root.setSpacing(8)
+
+        title_row = QHBoxLayout()
         title = QLabel("Time Travel")
         title.setObjectName("PageTitle")
-        root.addWidget(title)
+        title_row.addWidget(title)
+        hint = QLabel("Local-first historical research • network enrichment is opt-in")
+        hint.setObjectName("Muted")
+        title_row.addWidget(hint)
+        title_row.addStretch(1)
+        root.addLayout(title_row)
 
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
-
-        # --------------------------------------------------------------
-        # 30-minute replay
-        # --------------------------------------------------------------
-        replay = QWidget()
-        replay_root = QVBoxLayout(replay)
-        replay_root.setContentsMargins(8, 8, 8, 8)
-
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Replay end"))
-        self.day = QDateEdit(QDate.currentDate())
-        self.day.setCalendarPopup(True)
-        self.end_time = QTimeEdit(QTime.currentTime())
-        self.end_time.setDisplayFormat("HH:mm")
-        self.load_button = QPushButton("Load 30-Minute Window")
-        self.load_button.setObjectName("PrimaryButton")
-        self.reanalyze_button = QPushButton("Re-analyze with Current Brain")
-        self.reanalyze_button.setObjectName("PrimaryButton")
-        self.analysis_source = QLabel("RECORDED")
-        self.analysis_source.setObjectName("Muted")
-        header.addWidget(self.day)
-        header.addWidget(self.end_time)
-        header.addWidget(self.load_button)
-        header.addWidget(self.reanalyze_button)
-        header.addWidget(self.analysis_source)
-        header.addStretch(1)
-        replay_root.addLayout(header)
-
-        controls = QHBoxLayout()
-        self.back = QPushButton("◀")
-        self.play = QPushButton("▶")
-        self.forward = QPushButton("▶|")
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 30)
-        self.slider.setValue(30)
-        self.position = QLabel("T+30m")
-        self.position.setObjectName("Muted")
-        controls.addWidget(self.back)
-        controls.addWidget(self.play)
-        controls.addWidget(self.forward)
-        controls.addWidget(QLabel("T-30m"))
-        controls.addWidget(self.slider, 1)
-        controls.addWidget(QLabel("Selected"))
-        controls.addWidget(self.position)
-        replay_root.addLayout(controls)
-
-        body = QHBoxLayout()
-        self.chart = MarketChart("30-MINUTE MARKET REPLAY")
-        self.chart.setMinimumHeight(360)
-        body.addWidget(self.chart, 3)
-        side = QVBoxLayout()
-        self.decision = DecisionCard()
-        side.addWidget(self.decision)
-        self.forward_table = DataTable(["Outcome", "Value"])
-        outcome_card = Card("WHAT HAPPENED NEXT")
-        outcome_card.add_widget(self.forward_table)
-        side.addWidget(outcome_card)
-        self.news_table = DataTable(["Time", "Source", "Global context"])
-        news_card = Card("GLOBAL NEWS AT THIS TIME")
-        news_card.add_widget(self.news_table)
-        side.addWidget(news_card, 1)
-        body.addLayout(side, 2)
-        replay_root.addLayout(body, 1)
-
-        reasoning = QHBoxLayout()
-        self.why = ReasonList("REASONING AT THIS TIMESTAMP")
-        self.rejected = ReasonList("REJECTED THESIS")
-        reasoning.addWidget(self.why)
-        reasoning.addWidget(self.rejected)
-        replay_root.addLayout(reasoning)
-
-        self.tabs.addTab(replay, "30-Minute Replay")
-
-        # --------------------------------------------------------------
-        # Range analysis: 1 hour -> 30 days
-        # --------------------------------------------------------------
-        range_tab = QWidget()
-        range_root = QVBoxLayout(range_tab)
-        range_root.setContentsMargins(8, 8, 8, 8)
-        range_controls = QHBoxLayout()
-        range_controls.addWidget(QLabel("From"))
-        self.range_from_day = QDateEdit(QDate.currentDate().addDays(-5))
-        self.range_from_day.setCalendarPopup(True)
-        self.range_from_time = QTimeEdit(QTime(9, 15))
-        self.range_from_time.setDisplayFormat("HH:mm")
-        range_controls.addWidget(self.range_from_day)
-        range_controls.addWidget(self.range_from_time)
-        range_controls.addWidget(QLabel("To"))
-        self.range_to_day = QDateEdit(QDate.currentDate())
-        self.range_to_day.setCalendarPopup(True)
-        self.range_to_time = QTimeEdit(QTime(15, 30))
-        self.range_to_time.setDisplayFormat("HH:mm")
-        range_controls.addWidget(self.range_to_day)
-        range_controls.addWidget(self.range_to_time)
-
-        self.preset_1h = QPushButton("1H")
-        self.preset_today = QPushButton("Today")
-        self.preset_5d = QPushButton("5D")
-        self.preset_10d = QPushButton("10D")
-        self.preset_30d = QPushButton("30D")
-        for button in (
-            self.preset_1h,
-            self.preset_today,
-            self.preset_5d,
-            self.preset_10d,
-            self.preset_30d,
-        ):
-            range_controls.addWidget(button)
-
-        self.range_load_button = QPushButton("Analyze Period")
-        self.range_load_button.setObjectName("PrimaryButton")
-        range_controls.addWidget(self.range_load_button)
-        range_controls.addStretch(1)
-        range_root.addLayout(range_controls)
-
-        metrics = QHBoxLayout()
-        self.range_change = MetricCard("NIFTY CHANGE", "N/A")
-        self.range_sessions = MetricCard("SESSIONS", "0")
-        self.range_high_low = MetricCard("HIGH / LOW", "N/A")
-        self.range_pnl = MetricCard("SHADOW P&L", "0")
-        self.range_expectancy = MetricCard("EXPECTANCY", "N/A")
-        self.range_news = MetricCard("GLOBAL NEWS", "0")
-        for card in (
-            self.range_change,
-            self.range_sessions,
-            self.range_high_low,
-            self.range_pnl,
-            self.range_expectancy,
-            self.range_news,
-        ):
-            metrics.addWidget(card)
-        range_root.addLayout(metrics)
-
-        range_middle = QHBoxLayout()
-        self.range_chart = MarketChart("SELECTED RANGE")
-        self.range_chart.setMinimumHeight(300)
-        range_middle.addWidget(self.range_chart, 3)
-
-        scenario = QVBoxLayout()
-        scenario_row = QHBoxLayout()
-        self.open_bull = MetricCard("BULLISH OPEN WEIGHT", "N/A")
-        self.open_flat = MetricCard("BALANCED OPEN WEIGHT", "N/A")
-        self.open_bear = MetricCard("BEARISH OPEN WEIGHT", "N/A")
-        self.open_gap = MetricCard("GAP RISK", "N/A")
-        for card in (self.open_bull, self.open_flat, self.open_bear, self.open_gap):
-            scenario_row.addWidget(card)
-        scenario.addLayout(scenario_row)
-        self.opening_meta = QLabel(
-            "Opening possibilities are evidence weights, not calibrated probabilities."
-        )
-        self.opening_meta.setWordWrap(True)
-        self.opening_meta.setObjectName("Muted")
-        scenario.addWidget(self.opening_meta)
-
-        self.opening_drivers = DataTable(["Opening evidence / limitation"])
-        scenario_card = Card("NEXT-SESSION OPENING POSSIBILITIES")
-        scenario_card.add_widget(self.opening_drivers)
-        scenario.addWidget(scenario_card, 1)
-        range_middle.addLayout(scenario, 2)
-        range_root.addLayout(range_middle, 1)
-
-        self.range_notes = DataTable(["WHAT HAPPENED / EVIDENCE AROUND WHY"])
-        notes_card = Card("PERIOD ANALYSIS")
-        notes_card.add_widget(self.range_notes)
-        self.range_notes.setMaximumHeight(150)
-        range_root.addWidget(notes_card)
-
-        range_bottom = QHBoxLayout()
-        self.key_moments = DataTable(
-            ["Time", "Type", "Importance", "Summary", "Detail"]
-        )
-        moments_card = Card("KEY MOMENTS — DOUBLE-CLICK TO OPEN 30-MIN REPLAY")
-        moments_card.add_widget(self.key_moments)
-        range_bottom.addWidget(moments_card, 3)
-
-        summary_side = QVBoxLayout()
-        self.range_decisions = DataTable(["Decision", "Count"])
-        decision_card = Card("DECISION MIX")
-        decision_card.add_widget(self.range_decisions)
-        summary_side.addWidget(decision_card)
-        self.range_regimes = DataTable(["Regime", "Count"])
-        regime_card = Card("REGIME MIX")
-        regime_card.add_widget(self.range_regimes)
-        summary_side.addWidget(regime_card)
-        self.range_coverage = DataTable(["Data family", "Coverage"])
-        coverage_card = Card("DATA COVERAGE")
-        coverage_card.add_widget(self.range_coverage)
-        summary_side.addWidget(coverage_card)
-        range_bottom.addLayout(summary_side, 2)
-        range_root.addLayout(range_bottom, 1)
-
-        self.tabs.addTab(range_tab, "Range Analysis / Opening Possibilities")
+        self._build_replay_tab()
+        self._build_range_tab()
 
         self.timer = QTimer(self)
         self.timer.setInterval(900)
@@ -362,6 +256,256 @@ class TimeTravelPage(QWidget):
         self.preset_10d.clicked.connect(lambda: self._apply_range_preset(days=10))
         self.preset_30d.clicked.connect(lambda: self._apply_range_preset(days=30))
         self.key_moments.cellDoubleClicked.connect(self._open_key_moment)
+
+    def _build_replay_tab(self) -> None:
+        replay = QWidget()
+        replay_root = QVBoxLayout(replay)
+        replay_root.setContentsMargins(8, 8, 8, 8)
+        replay_root.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Replay end"))
+        self.day = QDateEdit(QDate.currentDate())
+        self.day.setCalendarPopup(True)
+        self.end_time = QTimeEdit(QTime.currentTime())
+        self.end_time.setDisplayFormat("HH:mm")
+        self.load_button = QPushButton("Load 30-Minute Window")
+        self.load_button.setObjectName("PrimaryButton")
+        self.replay_enrich_button = QPushButton("Fetch Missing")
+        self.replay_enrich_button.setToolTip(
+            "Explicitly fetch missing candles/news. Normal replay stays read-only."
+        )
+        self.reanalyze_button = QPushButton("Re-analyze with Current Brain")
+        self.reanalyze_button.setObjectName("PrimaryButton")
+        self.analysis_source = QLabel("RECORDED")
+        self.analysis_source.setObjectName("Muted")
+        for widget in (
+            self.day,
+            self.end_time,
+            self.load_button,
+            self.replay_enrich_button,
+            self.reanalyze_button,
+            self.analysis_source,
+        ):
+            header.addWidget(widget)
+        header.addStretch(1)
+        replay_root.addLayout(header)
+
+        controls = QHBoxLayout()
+        self.back = QPushButton("◀")
+        self.play = QPushButton("▶")
+        self.forward = QPushButton("▶|")
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 30)
+        self.slider.setValue(30)
+        self.position = QLabel("T+30m")
+        self.position.setObjectName("Muted")
+        for widget in (self.back, self.play, self.forward):
+            controls.addWidget(widget)
+        controls.addWidget(QLabel("T-30m"))
+        controls.addWidget(self.slider, 1)
+        controls.addWidget(self.position)
+        replay_root.addLayout(controls)
+
+        self.replay_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.chart = MarketChart("30-MINUTE MARKET REPLAY")
+        self.chart.setMinimumHeight(320)
+        self.replay_splitter.addWidget(self.chart)
+
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        self.decision = DecisionCard()
+        side_layout.addWidget(self.decision)
+        self.forward_table = DataTable(["Outcome", "Value"])
+        outcome_card = Card("WHAT HAPPENED NEXT")
+        outcome_card.add_widget(self.forward_table)
+        side_layout.addWidget(outcome_card)
+        self.news_table = DataTable(["Time", "Source", "Global context"])
+        news_card = Card("GLOBAL NEWS AT THIS TIME")
+        news_card.add_widget(self.news_table)
+        side_layout.addWidget(news_card, 1)
+        self.replay_splitter.addWidget(side)
+        self.replay_splitter.setStretchFactor(0, 7)
+        self.replay_splitter.setStretchFactor(1, 3)
+        replay_root.addWidget(self.replay_splitter, 1)
+
+        self.replay_details = QTabWidget()
+        self.why = ReasonList("REASONING AT THIS TIMESTAMP")
+        self.rejected = ReasonList("REJECTED THESIS")
+        self.replay_details.addTab(self.why, "Reasoning")
+        self.replay_details.addTab(self.rejected, "Rejected thesis")
+        self.replay_details.setMaximumHeight(190)
+        replay_root.addWidget(self.replay_details)
+        self.tabs.addTab(replay, "30-Minute Replay")
+
+    def _build_range_tab(self) -> None:
+        range_tab = QWidget()
+        range_root = QVBoxLayout(range_tab)
+        range_root.setContentsMargins(8, 8, 8, 8)
+        range_root.setSpacing(8)
+
+        date_row = QHBoxLayout()
+        date_row.addWidget(QLabel("From"))
+        self.range_from_day = QDateEdit(QDate.currentDate().addDays(-5))
+        self.range_from_day.setCalendarPopup(True)
+        self.range_from_time = QTimeEdit(QTime(9, 15))
+        self.range_from_time.setDisplayFormat("HH:mm")
+        date_row.addWidget(self.range_from_day)
+        date_row.addWidget(self.range_from_time)
+        date_row.addWidget(QLabel("To"))
+        self.range_to_day = QDateEdit(QDate.currentDate())
+        self.range_to_day.setCalendarPopup(True)
+        self.range_to_time = QTimeEdit(QTime(15, 30))
+        self.range_to_time.setDisplayFormat("HH:mm")
+        date_row.addWidget(self.range_to_day)
+        date_row.addWidget(self.range_to_time)
+        self.range_load_button = QPushButton("Analyze Period")
+        self.range_load_button.setObjectName("PrimaryButton")
+        self.range_enrich_button = QPushButton("Fetch Missing")
+        self.range_enrich_button.setToolTip(
+            "Opt-in network enrichment; analysis itself stays local/read-only."
+        )
+        date_row.addWidget(self.range_load_button)
+        date_row.addWidget(self.range_enrich_button)
+        date_row.addStretch(1)
+        range_root.addLayout(date_row)
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Quick range"))
+        self.preset_1h = QPushButton("1H")
+        self.preset_today = QPushButton("Today")
+        self.preset_5d = QPushButton("5D")
+        self.preset_10d = QPushButton("10D")
+        self.preset_30d = QPushButton("30D")
+        for button in (
+            self.preset_1h,
+            self.preset_today,
+            self.preset_5d,
+            self.preset_10d,
+            self.preset_30d,
+        ):
+            preset_row.addWidget(button)
+        preset_row.addStretch(1)
+        range_root.addLayout(preset_row)
+
+        self.range_change = MetricCard("NIFTY CHANGE", "N/A")
+        self.range_sessions = MetricCard("SESSIONS", "0")
+        self.range_high_low = MetricCard("HIGH / LOW", "N/A")
+        self.range_pnl = MetricCard("SHADOW P&L", "0")
+        self.range_expectancy = MetricCard("EXPECTANCY", "N/A")
+        self.range_news = MetricCard("RELEVANT NEWS", "0")
+        self.range_metrics = ResponsiveMetricGrid(
+            [
+                self.range_change,
+                self.range_sessions,
+                self.range_high_low,
+                self.range_pnl,
+                self.range_expectancy,
+                self.range_news,
+            ],
+            compact_height=74,
+        )
+        range_root.addWidget(self.range_metrics)
+
+        self.range_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.range_chart = MarketChart("PRICE CHART — SELECTED RANGE")
+        self.range_chart.setMinimumHeight(320)
+        self.range_splitter.addWidget(self.range_chart)
+
+        scenario_widget = QWidget()
+        scenario = QVBoxLayout(scenario_widget)
+        scenario.setContentsMargins(0, 0, 0, 0)
+        scenario.setSpacing(8)
+
+        context_card = Card("ANALYSIS CONTEXT")
+        self.opening_meta = QLabel(
+            "Opening possibilities are evidence weights, not calibrated probabilities."
+        )
+        self.opening_meta.setWordWrap(True)
+        self.opening_meta.setObjectName("Muted")
+        context_card.add_widget(self.opening_meta)
+        scenario.addWidget(context_card)
+
+        scenario_grid = QWidget()
+        grid = QGridLayout(scenario_grid)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(8)
+        self.open_bull = MetricCard("BULLISH OPEN WEIGHT", "N/A")
+        self.open_flat = MetricCard("BALANCED OPEN WEIGHT", "N/A")
+        self.open_bear = MetricCard("BEARISH OPEN WEIGHT", "N/A")
+        self.open_gap = MetricCard("GAP RISK", "N/A")
+        for index, card in enumerate(
+            (self.open_bull, self.open_flat, self.open_bear, self.open_gap)
+        ):
+            card.setMaximumHeight(104)
+            grid.addWidget(card, index // 2, index % 2)
+        scenario.addWidget(scenario_grid)
+
+        self.opening_drivers = TextPanel(
+            "NEXT-SESSION OPENING POSSIBILITIES",
+            "No opening evidence available for this selection.",
+        )
+        scenario.addWidget(self.opening_drivers, 1)
+        self.range_splitter.addWidget(scenario_widget)
+        self.range_splitter.setStretchFactor(0, 7)
+        self.range_splitter.setStretchFactor(1, 3)
+        range_root.addWidget(self.range_splitter, 3)
+
+        self.detail_tabs = QTabWidget()
+        self.key_moments = DataTable(
+            ["Time", "Type", "Importance", "Summary", "Detail"]
+        )
+        self.detail_tabs.addTab(self.key_moments, "Key Moments")
+
+        self.range_notes = TextPanel(
+            "WHAT HAPPENED / EVIDENCE AROUND WHY",
+            "No period analysis available yet.",
+        )
+        self.detail_tabs.addTab(self.range_notes, "Period Analysis")
+
+        self.range_decisions = DataTable(["Decision", "Count"])
+        self.detail_tabs.addTab(self.range_decisions, "Decision Mix")
+        self.range_regimes = DataTable(["Regime", "Count"])
+        self.detail_tabs.addTab(self.range_regimes, "Regime Mix")
+        self.range_coverage = DataTable(["Data family", "Coverage"])
+        self.detail_tabs.addTab(self.range_coverage, "Data Coverage")
+        self.detail_tabs.setMinimumHeight(190)
+        range_root.addWidget(self.detail_tabs, 2)
+
+        self.tabs.addTab(range_tab, "Range Analysis / Opening Possibilities")
+
+    def resizeEvent(self, event) -> None:
+        orientation = (
+            Qt.Orientation.Vertical
+            if event.size().width() < 1050
+            else Qt.Orientation.Horizontal
+        )
+        self.replay_splitter.setOrientation(orientation)
+        self.range_splitter.setOrientation(orientation)
+        super().resizeEvent(event)
+
+    def apply_layout_preset(self, preset: str) -> None:
+        width = max(1, self.width())
+        if preset == "Analysis":
+            self.range_splitter.setSizes([int(width * 0.78), int(width * 0.22)])
+            self.replay_splitter.setSizes([int(width * 0.78), int(width * 0.22)])
+            self.detail_tabs.setMinimumHeight(150)
+            self.replay_details.setMaximumHeight(140)
+        elif preset == "Monitoring":
+            self.range_splitter.setSizes([int(width * 0.58), int(width * 0.42)])
+            self.replay_splitter.setSizes([int(width * 0.62), int(width * 0.38)])
+            self.detail_tabs.setMinimumHeight(190)
+        elif preset == "Compact":
+            self.range_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
+            self.replay_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
+            self.detail_tabs.setMinimumHeight(160)
+            self.replay_details.setMaximumHeight(130)
+        else:
+            self.range_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
+            self.replay_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
+            self.detail_tabs.setMinimumHeight(190)
+            self.replay_details.setMaximumHeight(190)
 
     def selected_day(self) -> date:
         return self.day.date().toPython()
@@ -383,15 +527,16 @@ class TimeTravelPage(QWidget):
         ft = self.range_from_time.time()
         td = self.range_to_day.date()
         tt = self.range_to_time.time()
-        start = datetime(
-            fd.year(), fd.month(), fd.day(),
-            ft.hour(), ft.minute(), tzinfo=INDIA_TIME
+        return (
+            datetime(
+                fd.year(), fd.month(), fd.day(),
+                ft.hour(), ft.minute(), tzinfo=INDIA_TIME
+            ),
+            datetime(
+                td.year(), td.month(), td.day(),
+                tt.hour(), tt.minute(), tzinfo=INDIA_TIME
+            ),
         )
-        end = datetime(
-            td.year(), td.month(), td.day(),
-            tt.hour(), tt.minute(), tzinfo=INDIA_TIME
-        )
-        return start, end
 
     def _apply_range_preset(
         self,
@@ -425,15 +570,12 @@ class TimeTravelPage(QWidget):
             c for c in candles
             if start <= c.at.astimezone(INDIA_TIME) <= end
         )
-        rows = [
-            (float(i), float(c.open), float(c.close), float(c.low), float(c.high))
-            for i, c in enumerate(window)
-        ]
+        rows = _chart_rows(window)
         if rows:
             self.chart.set_candles(rows)
         else:
             self.chart.set_empty_message(
-                "No candles in this 30-minute replay window."
+                "No local candles in this replay window. Use Fetch Missing if needed."
             )
         self.slider.setValue(30)
         self._render_position()
@@ -461,29 +603,35 @@ class TimeTravelPage(QWidget):
             "N/A" if analysis.change_pct is None else f"{analysis.change_pct:.3f}%",
             _tone(analysis.change_pct),
         )
-        self.range_sessions.set_value(str(analysis.session_count))
+        self.range_sessions.set_value(
+            str(analysis.session_count),
+            subtitle="unique local trading dates",
+        )
         self.range_high_low.set_value(
             "N/A"
             if analysis.high is None or analysis.low is None
             else f"{analysis.high} / {analysis.low}"
         )
-        self.range_pnl.set_value(str(analysis.adjusted_pnl), _tone(analysis.adjusted_pnl))
-        self.range_expectancy.set_value(_text(analysis.expectancy), _tone(analysis.expectancy))
-        self.range_news.set_value(str(analysis.news_count))
+        self.range_pnl.set_value(
+            str(analysis.adjusted_pnl), _tone(analysis.adjusted_pnl)
+        )
+        self.range_expectancy.set_value(
+            _text(analysis.expectancy), _tone(analysis.expectancy)
+        )
+        self.range_news.set_value(
+            str(analysis.news_count),
+            subtitle="filtered market context",
+        )
 
-        rows = [
-            (float(i), float(c.open), float(c.close), float(c.low), float(c.high))
-            for i, c in enumerate(candles)
-        ]
-        # Keep long ranges readable without fabricating intermediate data.
-        if len(rows) > 1200:
-            step = max(1, len(rows) // 1200)
+        rows = _chart_rows(candles)
+        if len(rows) > 1400:
+            step = max(1, len(rows) // 1400)
             rows = rows[::step]
         if rows:
             self.range_chart.set_candles(rows)
         else:
             self.range_chart.set_empty_message(
-                "No NIFTY candles available in the selected range."
+                "No local NIFTY candles in this range. Use Fetch Missing if needed."
             )
 
         self.open_bull.set_value(f"{opening.bullish_weight:.1f}%", "positive")
@@ -497,18 +645,21 @@ class TimeTravelPage(QWidget):
             f"Next session candidate: {opening.next_session_candidate} • "
             f"Bias score {opening.bias_score:.1f} • "
             f"Evidence coverage {opening.evidence_coverage:.0f}%\n"
-            "These are scenario weights, not calibrated probabilities or a trade recommendation."
+            "Scenario weights only — not calibrated probabilities or a trade recommendation."
         )
-        evidence_rows = [[driver] for driver in opening.drivers]
-        evidence_rows.extend([[f"LIMITATION: {item}"] for item in opening.limitations])
-        self.opening_drivers.set_rows(evidence_rows)
+        evidence = list(opening.drivers)
+        evidence.extend(f"LIMITATION: {item}" for item in opening.limitations)
+        self.opening_drivers.set_text(
+            evidence or ["No opening evidence available for this selection."]
+        )
 
-        self.range_notes.set_rows([
-            [note] for note in analysis.analysis_notes
-        ])
+        self.range_notes.set_text(
+            list(analysis.analysis_notes)
+            or ["No period analysis available for this selection."]
+        )
 
         self._key_moments = analysis.key_moments
-        self.key_moments.set_rows([
+        moment_rows = [
             [
                 moment.at.astimezone(INDIA_TIME).strftime("%Y-%m-%d %H:%M"),
                 moment.kind,
@@ -517,13 +668,19 @@ class TimeTravelPage(QWidget):
                 moment.detail,
             ]
             for moment in analysis.key_moments
-        ])
-        self.range_decisions.set_rows([
-            [name, count] for name, count in analysis.decision_counts
-        ])
-        self.range_regimes.set_rows([
-            [name, count] for name, count in analysis.regime_counts
-        ])
+        ]
+        self.key_moments.set_rows(
+            moment_rows
+            or [["—", "—", "—", "No key moments in selected range.", ""]]
+        )
+        self.range_decisions.set_rows(
+            [[name, count] for name, count in analysis.decision_counts]
+            or [["No recorded decisions in selected range.", 0]]
+        )
+        self.range_regimes.set_rows(
+            [[name, count] for name, count in analysis.regime_counts]
+            or [["No recorded regime snapshots in selected range.", 0]]
+        )
         self.range_coverage.set_rows([
             [name, status] for name, status in analysis.coverage
         ])
@@ -573,7 +730,8 @@ class TimeTravelPage(QWidget):
                 item.title,
             ]
             for item in visible_news[:10]
-        ])
+        ] or [["—", "—", "No relevant cached news in this replay window."]])
+
         eligible = [
             d for d in self._decisions
             if d.decided_at.astimezone(INDIA_TIME) <= selected
@@ -586,8 +744,11 @@ class TimeTravelPage(QWidget):
             )
             self.why.set_reasons([])
             self.rejected.set_reasons([])
-            self.forward_table.set_rows([])
+            self.forward_table.set_rows(
+                [["Outcome", "No completed shadow outcome for this replay point."]]
+            )
             return
+
         self.decision.set_decision(
             decision.action,
             f"{decision.regime} • "
@@ -628,59 +789,101 @@ class AnalysisModePage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 34)
+        root.setSpacing(8)
+
         title = QLabel("Analysis Mode")
         title.setObjectName("PageTitle")
         root.addWidget(title)
 
-        metrics = QHBoxLayout()
         self.pnl = MetricCard("ADJUSTED P&L")
         self.win_rate = MetricCard("WIN RATE")
         self.expectancy = MetricCard("EXPECTANCY")
         self.profit_factor = MetricCard("PROFIT FACTOR")
         self.drawdown = MetricCard("MAX DRAWDOWN")
         self.trades = MetricCard("COMPLETED TRADES")
-        for card in (self.pnl, self.win_rate, self.expectancy, self.profit_factor, self.drawdown, self.trades):
-            metrics.addWidget(card)
-        root.addLayout(metrics)
+        self.metrics = ResponsiveMetricGrid(
+            [
+                self.pnl,
+                self.win_rate,
+                self.expectancy,
+                self.profit_factor,
+                self.drawdown,
+                self.trades,
+            ],
+            compact_height=74,
+        )
+        root.addWidget(self.metrics)
 
-        center = QHBoxLayout()
+        self.analysis_splitter = QSplitter(Qt.Orientation.Horizontal)
         equity_card = Card("SHADOW EQUITY CURVE")
         self.equity_plot = pg.PlotWidget()
         self.equity_plot.setBackground("#fffefa")
         self.equity_plot.showGrid(x=True, y=True, alpha=0.12)
         equity_card.add_widget(self.equity_plot)
-        center.addWidget(equity_card, 3)
+        self.analysis_splitter.addWidget(equity_card)
 
-        self.reason_table = DataTable(["Reason", "n", "Profit", "Loss", "Supported", "Contradicted", "Avg P&L"])
+        self.reason_table = DataTable(
+            ["Reason", "n", "Profit", "Loss", "Supported", "Contradicted", "Avg P&L"]
+        )
         reason_card = Card("REASON-CODE PERFORMANCE")
         reason_card.add_widget(self.reason_table)
-        center.addWidget(reason_card, 2)
-        root.addLayout(center, 1)
+        self.analysis_splitter.addWidget(reason_card)
+        self.analysis_splitter.setStretchFactor(0, 7)
+        self.analysis_splitter.setStretchFactor(1, 3)
+        root.addWidget(self.analysis_splitter, 1)
 
-        bottom = QHBoxLayout()
-        self.action_table = DataTable(["Action", "Trades", "Win %", "P&L", "Expectancy"])
-        action_card = Card("CALL VS PUT")
-        action_card.add_widget(self.action_table)
-        bottom.addWidget(action_card)
-        self.regime_table = DataTable(["Regime", "Trades", "Win %", "P&L", "Expectancy"])
-        regime_card = Card("REGIME PERFORMANCE")
-        regime_card.add_widget(self.regime_table)
-        bottom.addWidget(regime_card)
+        self.performance_tabs = QTabWidget()
+        self.action_table = DataTable(
+            ["Action", "Trades", "Win %", "P&L", "Expectancy"]
+        )
+        self.regime_table = DataTable(
+            ["Regime", "Trades", "Win %", "P&L", "Expectancy"]
+        )
         self.time_table = DataTable(["Hour", "Trades", "P&L", "Expectancy"])
-        time_card = Card("TIME-OF-DAY PERFORMANCE")
-        time_card.add_widget(self.time_table)
-        bottom.addWidget(time_card)
-        root.addLayout(bottom)
+        self.performance_tabs.addTab(self.action_table, "CALL vs PUT")
+        self.performance_tabs.addTab(self.regime_table, "Regime")
+        self.performance_tabs.addTab(self.time_table, "Time of day")
+        self.performance_tabs.setMinimumHeight(210)
+        root.addWidget(self.performance_tabs)
+
+    def resizeEvent(self, event) -> None:
+        self.analysis_splitter.setOrientation(
+            Qt.Orientation.Vertical
+            if event.size().width() < 1000
+            else Qt.Orientation.Horizontal
+        )
+        super().resizeEvent(event)
+
+    def apply_layout_preset(self, preset: str) -> None:
+        width = max(1, self.width())
+        if preset == "Analysis":
+            self.analysis_splitter.setSizes([int(width * 0.78), int(width * 0.22)])
+            self.performance_tabs.setMinimumHeight(180)
+        elif preset == "Monitoring":
+            self.analysis_splitter.setSizes([int(width * 0.60), int(width * 0.40)])
+            self.performance_tabs.setMinimumHeight(230)
+        elif preset == "Compact":
+            self.analysis_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
+            self.performance_tabs.setMinimumHeight(170)
+        else:
+            self.analysis_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
+            self.performance_tabs.setMinimumHeight(210)
 
     def refresh_manager(self, snapshot, completed_bundles) -> None:
         overall = snapshot.overall
         self.pnl.set_value(str(overall.adjusted_pnl), _tone(overall.adjusted_pnl))
-        self.win_rate.set_value("N/A" if overall.win_rate is None else f"{overall.win_rate:.2f}%")
-        self.expectancy.set_value(_text(overall.expectancy), _tone(overall.expectancy))
+        self.win_rate.set_value(
+            "N/A" if overall.win_rate is None else f"{overall.win_rate:.2f}%"
+        )
+        self.expectancy.set_value(
+            _text(overall.expectancy), _tone(overall.expectancy)
+        )
         self.profit_factor.set_value(_text(overall.profit_factor))
-        self.drawdown.set_value(str(overall.max_drawdown), "negative" if overall.max_drawdown > 0 else "neutral")
+        self.drawdown.set_value(
+            str(overall.max_drawdown),
+            "negative" if overall.max_drawdown > 0 else "neutral",
+        )
         self.trades.set_value(str(overall.trades))
 
         self.equity_plot.clear()
@@ -712,7 +915,27 @@ class AnalysisModePage(QWidget):
                 pen=pg.mkPen("#5f8d9c", width=2),
             )
 
-        self.action_table.set_rows([[name, m.trades, _text(m.win_rate), m.adjusted_pnl, _text(m.expectancy)] for name, m in snapshot.by_action])
-        self.regime_table.set_rows([[name, m.trades, _text(m.win_rate), m.adjusted_pnl, _text(m.expectancy)] for name, m in snapshot.by_regime])
-        self.time_table.set_rows([[name, m.trades, m.adjusted_pnl, _text(m.expectancy)] for name, m in snapshot.by_hour])
-        self.reason_table.set_rows([[r.reason_code, r.occurrences, r.profitable, r.losing, r.supported, r.contradicted, r.average_pnl] for r in snapshot.reasons[:30]])
+        self.action_table.set_rows([
+            [name, m.trades, _text(m.win_rate), m.adjusted_pnl, _text(m.expectancy)]
+            for name, m in snapshot.by_action
+        ] or [["No completed trades", 0, "N/A", 0, "N/A"]])
+        self.regime_table.set_rows([
+            [name, m.trades, _text(m.win_rate), m.adjusted_pnl, _text(m.expectancy)]
+            for name, m in snapshot.by_regime
+        ] or [["No completed trades", 0, "N/A", 0, "N/A"]])
+        self.time_table.set_rows([
+            [name, m.trades, m.adjusted_pnl, _text(m.expectancy)]
+            for name, m in snapshot.by_hour
+        ] or [["No completed trades", 0, 0, "N/A"]])
+        self.reason_table.set_rows([
+            [
+                r.reason_code,
+                r.occurrences,
+                r.profitable,
+                r.losing,
+                r.supported,
+                r.contradicted,
+                r.average_pnl,
+            ]
+            for r in snapshot.reasons[:30]
+        ] or [["No reason audits yet", 0, 0, 0, 0, 0, "N/A"]])

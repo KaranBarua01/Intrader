@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from intrader.ui.data_service import DesktopDataService
 from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
+from intrader.ui.strategy_lab_page import StrategyLabPage
 from intrader.ui.theme import APP_STYLESHEET
 from intrader.ui.updater import UpdateApplyResult, UpdateError, UpdateService, UpdateStatus
 from intrader.ui.utility_pages import (
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
             ("Intrader Mode", "Intrader Mode"),
             ("Time Travel", "Time Travel"),
             ("Analysis Mode", "Analysis Mode"),
+            ("Strategy Lab", "Strategy Lab"),
             ("Thesis", "Thesis"),
             ("Shadow Trader", "Shadow Trader"),
             ("Records Manager", "Records Manager"),
@@ -115,7 +117,12 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.mode_label)
         top_layout.addSpacing(14)
         self.mode_buttons = {}
-        for text, page in (("Intrader", "Intrader Mode"), ("Time Travel", "Time Travel"), ("Analysis", "Analysis Mode")):
+        for text, page in (
+            ("Intrader", "Intrader Mode"),
+            ("Time Travel", "Time Travel"),
+            ("Analysis", "Analysis Mode"),
+            ("Strategy Lab", "Strategy Lab"),
+        ):
             button = QPushButton(text)
             button.clicked.connect(lambda _checked=False, name=page: self.show_page(name))
             self.mode_buttons[page] = button
@@ -136,6 +143,7 @@ class MainWindow(QMainWindow):
         self.intrader_page = IntraderModePage()
         self.time_page = TimeTravelPage()
         self.analysis_page = AnalysisModePage()
+        self.strategy_page = StrategyLabPage()
         self.thesis_page = ThesisPage()
         self.shadow_page = ShadowTraderPage()
         self.records_page = RecordsManagerPage()
@@ -149,6 +157,7 @@ class MainWindow(QMainWindow):
             ("Intrader Mode", self.intrader_page),
             ("Time Travel", self.time_page),
             ("Analysis Mode", self.analysis_page),
+            ("Strategy Lab", self.strategy_page),
             ("Thesis", self.thesis_page),
             ("Shadow Trader", self.shadow_page),
             ("Records Manager", self.records_page),
@@ -168,6 +177,8 @@ class MainWindow(QMainWindow):
         self.time_page.load_button.clicked.connect(self.load_time_travel)
         self.time_page.range_load_button.clicked.connect(self.load_time_range)
         self.time_page.reanalyze_button.clicked.connect(self.reanalyze_time_travel)
+        self.strategy_page.analyze_requested.connect(self.load_strategy_lab)
+        self.strategy_page.replay_requested.connect(self.open_strategy_replay)
         self.calibration_page.refresh_requested.connect(self.refresh_calibration)
         self.export_page.shadow_export_requested.connect(self.export_shadow)
         self.export_page.reasoning_export_requested.connect(self.export_reasoning_log)
@@ -338,6 +349,63 @@ class MainWindow(QMainWindow):
             )
 
         self._run_task(task, done, failed)
+
+    def load_strategy_lab(self) -> None:
+        start, end = self.strategy_page.selected_range()
+        if start >= end:
+            QMessageBox.information(
+                self,
+                "Strategy Lab",
+                "The strategy-analysis start must be earlier than the end.",
+            )
+            return
+        if end - start > timedelta(days=30, minutes=1):
+            QMessageBox.information(
+                self,
+                "Strategy Lab",
+                "Strategy Lab is limited to 30 days per run.",
+            )
+            return
+
+        self.strategy_page.analyze_button.setEnabled(False)
+        self.strategy_page.analyze_button.setText("Analyzing…")
+
+        def task():
+            return self.service.analyze_strategy_range(start, end)
+
+        def done(snapshot) -> None:
+            self.strategy_page.analyze_button.setEnabled(True)
+            self.strategy_page.analyze_button.setText("Analyze Strategies")
+            self.strategy_page.set_snapshot(snapshot)
+            self.statusBar().showMessage(
+                "Strategy Lab analysis complete. No Intrader rules were changed.",
+                6000,
+            )
+
+        def failed(message: str) -> None:
+            self.strategy_page.analyze_button.setEnabled(True)
+            self.strategy_page.analyze_button.setText("Analyze Strategies")
+            self._show_error(message)
+
+        self._run_task(task, done, failed)
+
+    def open_strategy_replay(self, at) -> None:
+        replay_end = at.astimezone(INDIA_TIME) + timedelta(minutes=15)
+        self.time_page.day.setDate(
+            self.time_page.day.date().fromString(
+                replay_end.strftime("%Y-%m-%d"),
+                "yyyy-MM-dd",
+            )
+        )
+        self.time_page.end_time.setTime(
+            self.time_page.end_time.time().fromString(
+                replay_end.strftime("%H:%M"),
+                "HH:mm",
+            )
+        )
+        self.time_page.tabs.setCurrentIndex(0)
+        self.show_page("Time Travel")
+        self.load_time_travel()
 
     def refresh_calibration(self) -> None:
         self.calibration_page.refresh_button.setEnabled(False)

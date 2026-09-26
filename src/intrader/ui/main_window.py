@@ -166,6 +166,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.time_page.load_button.clicked.connect(self.load_time_travel)
+        self.time_page.range_load_button.clicked.connect(self.load_time_range)
+        self.time_page.reanalyze_button.clicked.connect(self.reanalyze_time_travel)
         self.calibration_page.refresh_requested.connect(self.refresh_calibration)
         self.export_page.shadow_export_requested.connect(self.export_shadow)
         self.export_page.reasoning_export_requested.connect(self.export_reasoning_log)
@@ -249,7 +251,9 @@ class MainWindow(QMainWindow):
             return (
                 self.service.decisions_for_day(day),
                 self.service.completed_for_day(day),
-                self.service.load_nifty_candles(day),
+                self.service.load_nifty_candle_range(
+                    start, end, backfill_missing=True
+                ),
                 self.service.news_for_window(start, end),
             )
         def done(payload) -> None:
@@ -259,6 +263,80 @@ class MainWindow(QMainWindow):
         def failed(message: str) -> None:
             self.time_page.load_button.setEnabled(True)
             self._show_error(message)
+        self._run_task(task, done, failed)
+
+    def load_time_range(self) -> None:
+        start, end = self.time_page.selected_range()
+        if start >= end:
+            QMessageBox.information(
+                self,
+                "Time Travel",
+                "The range start must be earlier than the range end.",
+            )
+            return
+        if end - start > timedelta(days=30, minutes=1):
+            QMessageBox.information(
+                self,
+                "Time Travel",
+                "Range Analysis is limited to 30 days.",
+            )
+            return
+
+        self.time_page.range_load_button.setEnabled(False)
+        self.time_page.range_load_button.setText("Analyzing…")
+
+        def task():
+            return self.service.analyze_time_range(start, end)
+
+        def done(payload) -> None:
+            self.time_page.range_load_button.setEnabled(True)
+            self.time_page.range_load_button.setText("Analyze Period")
+            analysis, opening, candles, _news, _events = payload
+            self.time_page.set_range_analysis(analysis, opening, candles)
+            self.statusBar().showMessage(
+                "Historical range analysis complete.", 5000
+            )
+
+        def failed(message: str) -> None:
+            self.time_page.range_load_button.setEnabled(True)
+            self.time_page.range_load_button.setText("Analyze Period")
+            self._show_error(message)
+
+        self._run_task(task, done, failed)
+
+    def reanalyze_time_travel(self) -> None:
+        at = self.time_page.selected_replay_datetime()
+        self.time_page.reanalyze_button.setEnabled(False)
+        self.time_page.reanalyze_button.setText("Re-analyzing…")
+
+        def task():
+            return self.service.reanalyze_timestamp(at)
+
+        def done(record) -> None:
+            self.time_page.reanalyze_button.setEnabled(True)
+            self.time_page.reanalyze_button.setText(
+                "Re-analyze with Current Brain"
+            )
+            self.time_page.set_reanalysis(record)
+            self.statusBar().showMessage(
+                "Current-Brain historical re-analysis complete. "
+                "No historical record was modified.",
+                6000,
+            )
+
+        def failed(message: str) -> None:
+            self.time_page.reanalyze_button.setEnabled(True)
+            self.time_page.reanalyze_button.setText(
+                "Re-analyze with Current Brain"
+            )
+            QMessageBox.information(
+                self,
+                "Historical Re-analysis",
+                "Full re-analysis needs stored price, options, futures/VIX "
+                "and order-flow data for the selected timestamp.\n\n"
+                + message,
+            )
+
         self._run_task(task, done, failed)
 
     def refresh_calibration(self) -> None:

@@ -11,7 +11,9 @@ from intrader.checkpoint2 import check_market_access
 from intrader.config import load_config
 from intrader.credentials import CredentialStore
 from intrader.global_news import fetch_global_market_news
-from intrader.historical import Candle, INDIA_TIME
+from intrader.historical_intelligence import analyze_historical_range, build_opening_possibilities
+from intrader.historical_reanalysis import reanalyze_stored_decision
+from intrader.historical import Candle, INDIA_TIME, fetch_candles
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
 from intrader.storage import SQLiteStore
@@ -128,6 +130,201 @@ class DesktopDataService:
                 start=start,
                 end=end,
             )
+
+    def refresh_global_news_range(self, start: datetime, end: datetime) -> int:
+        """Refresh worldwide market headlines in bounded chunks for Time Travel."""
+
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            return 0
+        if end - start > timedelta(days=30, minutes=1):
+            raise ValueError("global news range is limited to 30 days")
+
+        inserted = 0
+        cursor = start
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(days=3), end)
+            try:
+                items = fetch_global_market_news(
+                    cursor, chunk_end, max_records=250
+                )
+                if items:
+                    with SQLiteStore(self.database_path) as store:
+                        inserted += store.store_news_items(items)
+            except Exception:
+                pass
+            cursor = chunk_end
+        return inserted
+
+    @staticmethod
+    def _previous_weekday(day: date) -> date:
+        candidate = day
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+        return candidate
+
+    def load_nifty_candle_range(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        backfill_missing: bool = True,
+    ) -> tuple[Candle, ...]:
+        """Load/backfill up to 30 calendar days of NIFTY one-minute candles."""
+
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError("candle range invalid")
+        if end - start > timedelta(days=30, minutes=1):
+            raise ValueError("candle range is limited to 30 days")
+
+        credential_store = CredentialStore()
+        transport = RequestsTransport()
+        session = authenticate(credential_store, transport)
+        reference_day = self._previous_weekday(end.astimezone(INDIA_TIME).date())
+        market = check_market_access(
+            credential_store,
+            transport,
+            as_of=reference_day,
+            session=session,
+        )
+        spot = market.instruments.spot
+
+        with SQLiteStore(self.database_path) as store:
+            existing = store.load_candles(
+                spot.exchange,
+                spot.token,
+                "ONE_MINUTE",
+                start=start,
+                end=end,
+            )
+            if not backfill_missing:
+                return existing
+
+            existing_days = {
+                candle.at.astimezone(INDIA_TIME).date()
+                for candle in existing
+            }
+            day = start.astimezone(INDIA_TIME).date()
+            last_day = end.astimezone(INDIA_TIME).date()
+            while day <= last_day:
+                if day.weekday() < 5 and day not in existing_days:
+                    session_start = datetime.combine(
+                        day, time(9, 15), INDIA_TIME
+                    )
+                    session_end = datetime.combine(
+                        day, time(15, 30), INDIA_TIME
+                    )
+                    fetch_start = max(start.astimezone(INDIA_TIME), session_start)
+                    fetch_end = min(end.astimezone(INDIA_TIME), session_end)
+                    if fetch_start < fetch_end:
+                        try:
+                            rows = fetch_candles(
+                                session,
+                                transport,
+                                spot,
+                                fetch_start,
+                                fetch_end,
+                                "ONE_MINUTE",
+                            )
+                            if rows:
+                                store.store_candles(spot, "ONE_MINUTE", rows)
+                        except Exception:
+                            # Holidays/source gaps remain explicitly unavailable.
+                            pass
+                day += timedelta(days=1)
+
+            return store.load_candles(
+                spot.exchange,
+                spot.token,
+                "ONE_MINUTE",
+                start=start,
+                end=end,
+            )
+
+    def analyze_time_range(self, start: datetime, end: datetime):
+        """Build range intelligence plus a pre-open scenario snapshot."""
+
+        candles = self.load_nifty_candle_range(start, end, backfill_missing=True)
+        self.refresh_global_news_range(start, end)
+
+        with SQLiteStore(self.database_path) as store:
+            decisions = tuple(
+                d for d in store.load_decision_records()
+                if start <= d.decided_at.astimezone(start.tzinfo) <= end
+            )
+            bundles = tuple(
+                b for b in store.load_completed_shadow_bundles()
+                if start <= b[1].opened_at.astimezone(start.tzinfo) <= end
+            )
+            news = store.load_news_items(start=start, end=end)
+            events = store.load_scheduled_events(start=start, end=end)
+
+        analysis = analyze_historical_range(
+            candles, decisions, bundles, news, events, start, end
+        )
+
+        next_day = end.astimezone(INDIA_TIME).date() + timedelta(days=1)
+        while next_day.weekday() >= 5:
+            next_day += timedelta(days=1)
+        pre_open = datetime.combine(next_day, time(9, 0), INDIA_TIME)
+        now = datetime.now(INDIA_TIME)
+        opening_as_of = min(now, pre_open)
+        if opening_as_of < end:
+            opening_as_of = end
+
+        try:
+            self.refresh_global_news_range(end, opening_as_of)
+        except Exception:
+            pass
+
+        with SQLiteStore(self.database_path) as store:
+            post_close_news = store.load_news_items(
+                start=end,
+                end=opening_as_of,
+            )
+            upcoming_events = store.load_scheduled_events(
+                start=end,
+                end=pre_open + timedelta(hours=8),
+            )
+
+        opening = build_opening_possibilities(
+            analysis,
+            decisions,
+            candles,
+            post_close_news,
+            upcoming_events,
+            as_of=opening_as_of,
+        )
+        return analysis, opening, candles, news, events
+
+    def reanalyze_timestamp(self, at: datetime):
+        """Run the current Brain against stored historical data without writes."""
+
+        if at.tzinfo is None:
+            raise ValueError("reanalysis timestamp must be timezone aware")
+        day = at.astimezone(INDIA_TIME).date()
+        config = load_config()
+        credential_store = CredentialStore()
+        transport = RequestsTransport()
+        session = authenticate(credential_store, transport)
+        market = check_market_access(
+            credential_store,
+            transport,
+            as_of=day,
+            session=session,
+        )
+        with SQLiteStore(self.database_path) as store:
+            before = store.count("decision_records")
+            record = reanalyze_stored_decision(
+                store,
+                market.instruments,
+                day,
+                at,
+                config,
+            )
+            after = store.count("decision_records")
+        if after != before:
+            raise RuntimeError("historical reanalysis mutated immutable history")
+        return record
 
     def calibration_report(self):
         from intrader.calibration_pipeline import run_calibration

@@ -262,27 +262,32 @@ class DesktopDataService:
             candles, decisions, bundles, news, events, start, end
         )
 
-        next_day = end.astimezone(INDIA_TIME).date() + timedelta(days=1)
+        reference_close = (
+            candles[-1].at.astimezone(INDIA_TIME)
+            if candles
+            else end.astimezone(INDIA_TIME)
+        )
+        next_day = reference_close.date() + timedelta(days=1)
         while next_day.weekday() >= 5:
             next_day += timedelta(days=1)
         pre_open = datetime.combine(next_day, time(9, 0), INDIA_TIME)
         now = datetime.now(INDIA_TIME)
         opening_as_of = min(now, pre_open)
-        if opening_as_of < end:
-            opening_as_of = end
+        if opening_as_of < reference_close:
+            opening_as_of = reference_close
 
         try:
-            self.refresh_global_news_range(end, opening_as_of)
+            self.refresh_global_news_range(reference_close, opening_as_of)
         except Exception:
             pass
 
         with SQLiteStore(self.database_path) as store:
             post_close_news = store.load_news_items(
-                start=end,
+                start=reference_close,
                 end=opening_as_of,
             )
             upcoming_events = store.load_scheduled_events(
-                start=end,
+                start=reference_close,
                 end=pre_open + timedelta(hours=8),
             )
 

@@ -96,7 +96,7 @@ class StrategyLabPage(QWidget):
         controls.addWidget(QLabel("Source"))
         self.source_filter = QComboBox()
         self.source_filter.addItems(
-            ["All", "Steve Nison", "Ashwani Gujral", "John Carter"]
+            ["All", "Steve Nison", "Ashwani Gujral", "John Carter", "Mark Douglas"]
         )
         controls.addWidget(self.source_filter)
 

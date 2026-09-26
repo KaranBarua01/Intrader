@@ -64,46 +64,49 @@ class StrategyLabPage(QWidget):
         explainer.setObjectName("Muted")
         root.addWidget(explainer)
 
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("From"))
+        date_controls = QHBoxLayout()
+        date_controls.addWidget(QLabel("From"))
         self.from_day = QDateEdit(QDate.currentDate().addDays(-5))
         self.from_day.setCalendarPopup(True)
         self.from_time = QTimeEdit(QTime(9, 15))
         self.from_time.setDisplayFormat("HH:mm")
-        controls.addWidget(self.from_day)
-        controls.addWidget(self.from_time)
-        controls.addWidget(QLabel("To"))
+        date_controls.addWidget(self.from_day)
+        date_controls.addWidget(self.from_time)
+        date_controls.addWidget(QLabel("To"))
         self.to_day = QDateEdit(QDate.currentDate())
         self.to_day.setCalendarPopup(True)
         self.to_time = QTimeEdit(QTime(15, 30))
         self.to_time.setDisplayFormat("HH:mm")
-        controls.addWidget(self.to_day)
-        controls.addWidget(self.to_time)
-
-        self.preset_5d = QPushButton("5D")
-        self.preset_10d = QPushButton("10D")
-        self.preset_30d = QPushButton("30D")
-        for button in (self.preset_5d, self.preset_10d, self.preset_30d):
-            controls.addWidget(button)
-
-        controls.addWidget(QLabel("Source"))
-        self.source_filter = QComboBox()
-        self.source_filter.addItems(
-            ["All", "Steve Nison", "Ashwani Gujral", "John Carter", "Mark Douglas"]
-        )
-        controls.addWidget(self.source_filter)
+        date_controls.addWidget(self.to_day)
+        date_controls.addWidget(self.to_time)
 
         self.analyze_button = QPushButton("Analyze Strategies")
         self.analyze_button.setObjectName("PrimaryButton")
-        controls.addWidget(self.analyze_button)
-
+        date_controls.addWidget(self.analyze_button)
         self.fetch_button = QPushButton("Fetch Missing")
         self.fetch_button.setToolTip(
             "Explicit opt-in network enrichment. Strategy analysis itself is read-only."
         )
-        controls.addWidget(self.fetch_button)
-        controls.addStretch(1)
-        root.addLayout(controls)
+        date_controls.addWidget(self.fetch_button)
+        date_controls.addStretch(1)
+        root.addLayout(date_controls)
+
+        filter_controls = QHBoxLayout()
+        filter_controls.addWidget(QLabel("Quick range"))
+        self.preset_5d = QPushButton("5D")
+        self.preset_10d = QPushButton("10D")
+        self.preset_30d = QPushButton("30D")
+        for button in (self.preset_5d, self.preset_10d, self.preset_30d):
+            filter_controls.addWidget(button)
+
+        filter_controls.addWidget(QLabel("Source"))
+        self.source_filter = QComboBox()
+        self.source_filter.addItems(
+            ["All", "Steve Nison", "Ashwani Gujral", "John Carter", "Mark Douglas"]
+        )
+        filter_controls.addWidget(self.source_filter)
+        filter_controls.addStretch(1)
+        root.addLayout(filter_controls)
 
         self.total_signals = MetricCard("TOTAL SIGNALS", "0")
         self.active_strategies = MetricCard("ACTIVE STRATEGIES", "0")

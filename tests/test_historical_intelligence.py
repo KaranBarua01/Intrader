@@ -90,7 +90,19 @@ def test_range_analysis_summarizes_price_decisions_context() -> None:
     assert "NIFTY rose" in result.analysis_notes[0]
     assert any(moment.kind == "BRAIN_DECISION" for moment in result.key_moments)
     assert any(moment.kind == "NEWS_CONTEXT" for moment in result.key_moments)
-    assert dict(result.coverage)["Candles"] == "AVAILABLE"
+    assert dict(result.coverage)["Candles"].startswith("AVAILABLE")
+    assert set(dict(result.coverage)) == {
+        "Candles",
+        "Options",
+        "Futures",
+        "VIX / Index",
+        "Breadth",
+        "Order flow",
+        "Recorded decisions",
+        "Shadow outcomes",
+        "Global/news context",
+        "Scheduled events",
+    }
 
 
 def test_range_analysis_rejects_more_than_30_days() -> None:

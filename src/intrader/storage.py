@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class StorageError(Exception):
@@ -267,6 +267,45 @@ class SQLiteStore:
                 BEFORE DELETE ON shadow_trades
                 BEGIN
                     SELECT RAISE(ABORT, 'shadow trades are immutable');
+                END;
+
+                CREATE TABLE IF NOT EXISTS shadow_outcomes (
+                    trade_id TEXT PRIMARY KEY,
+                    evaluated_at_utc TEXT NOT NULL,
+                    exit_at_utc TEXT NOT NULL,
+                    exit_reason TEXT NOT NULL CHECK(exit_reason IN ('TARGET', 'STOP', 'TIMEOUT')),
+                    exit_price REAL NOT NULL CHECK(exit_price > 0),
+                    gross_pnl REAL NOT NULL,
+                    estimated_friction REAL NOT NULL CHECK(estimated_friction >= 0),
+                    adjusted_pnl REAL NOT NULL,
+                    gross_return_pct REAL NOT NULL,
+                    adjusted_return_pct REAL NOT NULL,
+                    mfe_price REAL NOT NULL,
+                    mae_price REAL NOT NULL,
+                    mfe_amount REAL NOT NULL,
+                    mae_amount REAL NOT NULL,
+                    spot_exit REAL,
+                    spot_change REAL,
+                    directional_spot_change REAL,
+                    forward_1m REAL,
+                    forward_3m REAL,
+                    forward_5m REAL,
+                    forward_10m REAL,
+                    forward_15m REAL,
+                    forward_30m REAL,
+                    FOREIGN KEY (trade_id) REFERENCES shadow_trades(trade_id)
+                );
+
+                CREATE TRIGGER IF NOT EXISTS shadow_outcomes_no_update
+                BEFORE UPDATE ON shadow_outcomes
+                BEGIN
+                    SELECT RAISE(ABORT, 'shadow outcomes are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS shadow_outcomes_no_delete
+                BEFORE DELETE ON shadow_outcomes
+                BEGIN
+                    SELECT RAISE(ABORT, 'shadow outcomes are immutable');
                 END;
                 """
             )
@@ -1048,6 +1087,131 @@ class SQLiteStore:
             raise StorageError("SQLite shadow trade read failed") from None
         return None if row is None else self.load_shadow_trade(str(row[0]))
 
+    def store_shadow_outcome(self, outcome) -> bool:
+        """Insert one immutable terminal shadow outcome."""
+
+        try:
+            existing = self._connection.execute(
+                "SELECT 1 FROM shadow_outcomes WHERE trade_id = ?",
+                (outcome.trade_id,),
+            ).fetchone()
+            if existing is not None:
+                return False
+            forwards = dict(outcome.forward_returns)
+            with self._connection:
+                self._connection.execute(
+                    """
+                    INSERT INTO shadow_outcomes (
+                        trade_id, evaluated_at_utc, exit_at_utc, exit_reason,
+                        exit_price, gross_pnl, estimated_friction, adjusted_pnl,
+                        gross_return_pct, adjusted_return_pct, mfe_price,
+                        mae_price, mfe_amount, mae_amount, spot_exit, spot_change,
+                        directional_spot_change, forward_1m, forward_3m,
+                        forward_5m, forward_10m, forward_15m, forward_30m
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        outcome.trade_id,
+                        _utc_iso(outcome.evaluated_at),
+                        _utc_iso(outcome.exit_at),
+                        outcome.exit_reason,
+                        float(outcome.exit_price),
+                        float(outcome.gross_pnl),
+                        float(outcome.estimated_friction),
+                        float(outcome.adjusted_pnl),
+                        float(outcome.gross_return_pct),
+                        float(outcome.adjusted_return_pct),
+                        float(outcome.mfe_price),
+                        float(outcome.mae_price),
+                        float(outcome.mfe_amount),
+                        float(outcome.mae_amount),
+                        None if outcome.spot_exit is None else float(outcome.spot_exit),
+                        None if outcome.spot_change is None else float(outcome.spot_change),
+                        None if outcome.directional_spot_change is None else float(outcome.directional_spot_change),
+                        None if forwards.get(1) is None else float(forwards[1]),
+                        None if forwards.get(3) is None else float(forwards[3]),
+                        None if forwards.get(5) is None else float(forwards[5]),
+                        None if forwards.get(10) is None else float(forwards[10]),
+                        None if forwards.get(15) is None else float(forwards[15]),
+                        None if forwards.get(30) is None else float(forwards[30]),
+                    ),
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite shadow outcome write failed") from None
+        return True
+
+    def load_shadow_outcome(self, trade_id: str):
+        try:
+            row = self._connection.execute(
+                """
+                SELECT trade_id, evaluated_at_utc, exit_at_utc, exit_reason,
+                       exit_price, gross_pnl, estimated_friction, adjusted_pnl,
+                       gross_return_pct, adjusted_return_pct, mfe_price,
+                       mae_price, mfe_amount, mae_amount, spot_exit, spot_change,
+                       directional_spot_change, forward_1m, forward_3m,
+                       forward_5m, forward_10m, forward_15m, forward_30m
+                FROM shadow_outcomes
+                WHERE trade_id = ?
+                """,
+                (trade_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            raise StorageError("SQLite shadow outcome read failed") from None
+        if row is None:
+            return None
+
+        from intrader.outcomes import ShadowOutcome
+
+        forward_minutes = (1, 3, 5, 10, 15, 30)
+        forward_values = row[17:23]
+        return ShadowOutcome(
+            trade_id=str(row[0]),
+            evaluated_at=datetime.fromisoformat(row[1]),
+            exit_at=datetime.fromisoformat(row[2]),
+            exit_reason=str(row[3]),
+            exit_price=Decimal(str(row[4])),
+            gross_pnl=Decimal(str(row[5])),
+            estimated_friction=Decimal(str(row[6])),
+            adjusted_pnl=Decimal(str(row[7])),
+            gross_return_pct=Decimal(str(row[8])),
+            adjusted_return_pct=Decimal(str(row[9])),
+            mfe_price=Decimal(str(row[10])),
+            mae_price=Decimal(str(row[11])),
+            mfe_amount=Decimal(str(row[12])),
+            mae_amount=Decimal(str(row[13])),
+            spot_exit=None if row[14] is None else Decimal(str(row[14])),
+            spot_change=None if row[15] is None else Decimal(str(row[15])),
+            directional_spot_change=None if row[16] is None else Decimal(str(row[16])),
+            forward_returns=tuple(
+                (
+                    minute,
+                    None if value is None else Decimal(str(value)),
+                )
+                for minute, value in zip(forward_minutes, forward_values)
+            ),
+        )
+
+    def load_unsettled_shadow_trades(self):
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT trade_id
+                FROM shadow_trades
+                WHERE trade_id NOT IN (SELECT trade_id FROM shadow_outcomes)
+                ORDER BY opened_at_utc ASC
+                """
+            ).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite unsettled shadow read failed") from None
+        return tuple(
+            trade
+            for row in rows
+            if (trade := self.load_shadow_trade(str(row[0]))) is not None
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -1305,6 +1469,7 @@ class SQLiteStore:
             "index_snapshots", "future_snapshots", "breadth_snapshots",
             "news_items", "scheduled_events", "decision_records",
             "decision_families", "decision_reasons", "shadow_trades",
+            "shadow_outcomes",
         }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

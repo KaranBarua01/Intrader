@@ -57,7 +57,7 @@ def test_schema_initializes_twice_with_wal_and_reopens(tmp_path) -> None:
     store.initialize()
 
     assert store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 8
     store.store_candles(_bundle().spot, "ONE_MINUTE", [_candle()])
     store.close()
 

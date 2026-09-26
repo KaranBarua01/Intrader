@@ -5,24 +5,42 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from PySide6.QtCore import QLineF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPicture, QPen
+from PySide6.QtCore import QLineF, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPicture, QPen
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHeaderView, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser,
-    QToolButton, QVBoxLayout, QWidget,
+    QAbstractButton, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGridLayout,
+    QHeaderView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QToolButton,
+    QVBoxLayout, QWidget,
 )
 import pyqtgraph as pg
 
 from intrader.historical import INDIA_TIME
 
 
+BULLISH_COLOR = "#2d8a60"
+BEARISH_COLOR = "#c64b4b"
+TIMEFRAME_MINUTES = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1H": 60,
+}
+
+
 class Card(QFrame):
     def __init__(self, title: str | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(38, 59, 70, 20))
+        self.setGraphicsEffect(shadow)
         self.layout_box = QVBoxLayout(self)
         self.layout_box.setContentsMargins(14, 12, 14, 14)
         self.layout_box.setSpacing(8)
@@ -114,6 +132,116 @@ class ResponsiveMetricGrid(QWidget):
             self.grid.takeAt(0)
         for index, card in enumerate(self.cards):
             self.grid.addWidget(card, index // columns, index % columns)
+
+
+class MetricRibbon(QFrame):
+    """Compact single-row KPI summary that prioritizes workspace height."""
+
+    def __init__(self, metrics: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.setObjectName("MetricRibbon")
+        self._labels: dict[str, QLabel] = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 7, 12, 7)
+        layout.setSpacing(0)
+        for index, (key, value) in enumerate(metrics):
+            block = QWidget()
+            block_layout = QVBoxLayout(block)
+            block_layout.setContentsMargins(10, 0, 10, 0)
+            block_layout.setSpacing(1)
+            title = QLabel(key)
+            title.setObjectName("RibbonLabel")
+            value_label = QLabel(value)
+            value_label.setObjectName("RibbonValue")
+            block_layout.addWidget(title)
+            block_layout.addWidget(value_label)
+            layout.addWidget(block, 1)
+            self._labels[key] = value_label
+            if index < len(metrics) - 1:
+                divider = QFrame()
+                divider.setObjectName("RibbonDivider")
+                divider.setFrameShape(QFrame.Shape.VLine)
+                divider.setFixedWidth(1)
+                layout.addWidget(divider)
+
+    def set_metric(
+        self,
+        key: str,
+        value: str,
+        tone: str = "neutral",
+        tooltip: str | None = None,
+    ) -> None:
+        label = self._labels[key]
+        label.setText(str(value))
+        label.setObjectName(
+            "Positive"
+            if tone == "positive"
+            else "Negative"
+            if tone == "negative"
+            else "RibbonValue"
+        )
+        if tooltip is not None:
+            label.setToolTip(tooltip)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def value(self, key: str) -> str:
+        return self._labels[key].text()
+
+
+class TriangleDockButton(QAbstractButton):
+    """Equilateral dock toggle using the exact candlestick direction colors."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._dock_open = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Open navigation dock")
+        self.setFixedSize(38, 32)
+
+    def sizeHint(self) -> QSize:
+        return QSize(38, 32)
+
+    def set_dock_open(self, is_open: bool) -> None:
+        if self._dock_open == is_open:
+            return
+        self._dock_open = is_open
+        self.setToolTip(
+            "Close navigation dock" if is_open else "Open navigation dock"
+        )
+        self.update()
+
+    def dock_open(self) -> bool:
+        return self._dock_open
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        side = 18.0
+        height = side * (3.0 ** 0.5) / 2.0
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        if self._dock_open:
+            points = [
+                QPointF(cx - side / 2.0, cy - height / 2.0),
+                QPointF(cx + side / 2.0, cy - height / 2.0),
+                QPointF(cx, cy + height / 2.0),
+            ]
+            color = QColor(BEARISH_COLOR)
+        else:
+            points = [
+                QPointF(cx, cy - height / 2.0),
+                QPointF(cx - side / 2.0, cy + height / 2.0),
+                QPointF(cx + side / 2.0, cy + height / 2.0),
+            ]
+            color = QColor(BULLISH_COLOR)
+        path = QPainterPath(points[0])
+        path.lineTo(points[1])
+        path.lineTo(points[2])
+        path.closeSubpath()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPath(path)
 
 
 class MetricCard(Card):
@@ -244,7 +372,7 @@ class CandlestickItem(pg.GraphicsObject):
             highs = []
             for x, open_, close, low, high in data:
                 positive = close >= open_
-                color = QColor("#2d8a60" if positive else "#c64b4b")
+                color = QColor(BULLISH_COLOR if positive else BEARISH_COLOR)
                 painter.setPen(QPen(color, 1))
                 painter.drawLine(QLineF(x, low, x, high))
                 top = max(open_, close)
@@ -290,13 +418,52 @@ class DateAxisItem(pg.AxisItem):
 
 
 class MarketChart(Card):
-    def __init__(self, title: str = "NIFTY CANDLES") -> None:
-        super().__init__(title)
+    """Candlestick chart with built-in candle-size selector."""
+
+    timeframe_changed = Signal(str)
+
+    def __init__(
+        self,
+        title: str = "NIFTY CANDLES",
+        *,
+        show_timeframes: bool = True,
+    ) -> None:
+        super().__init__(None)
+        self._title = title
+        self._raw_candles = ()
+        self._timeframe = "Auto"
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 2)
+        title_label = QLabel(title)
+        title_label.setObjectName("CardTitle")
+        header.addWidget(title_label)
+        header.addStretch(1)
+
+        self.timeframe_group = QButtonGroup(self)
+        self.timeframe_group.setExclusive(True)
+        self.timeframe_buttons: dict[str, QPushButton] = {}
+        if show_timeframes:
+            for label in ("1m", "3m", "5m", "15m", "30m", "1H", "Auto"):
+                button = QPushButton(label)
+                button.setObjectName("TimeframeButton")
+                button.setCheckable(True)
+                button.setProperty("timeframeActive", label == "Auto")
+                button.setChecked(label == "Auto")
+                button.setFixedHeight(26)
+                button.clicked.connect(
+                    lambda _checked=False, value=label: self.set_timeframe(value)
+                )
+                self.timeframe_group.addButton(button)
+                self.timeframe_buttons[label] = button
+                header.addWidget(button)
+        self.layout_box.insertLayout(0, header)
+
         self.plot = pg.PlotWidget(
             axisItems={"bottom": DateAxisItem(orientation="bottom")}
         )
         self.plot.setBackground("#fffefa")
-        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        self.plot.showGrid(x=True, y=True, alpha=0.08)
         self.plot.getAxis("left").setPen("#9aa1a5")
         self.plot.getAxis("bottom").setPen("#9aa1a5")
         self.plot.setMouseEnabled(x=True, y=True)
@@ -305,11 +472,108 @@ class MarketChart(Card):
         self.layout_box.addWidget(self.plot)
         self.set_empty_message("No market data loaded.")
 
-    def set_candles(self, rows: list[tuple[float, float, float, float, float]]) -> None:
+    def selected_timeframe(self) -> str:
+        return self._timeframe
+
+    def set_timeframe(self, label: str) -> None:
+        if label not in (*TIMEFRAME_MINUTES.keys(), "Auto"):
+            return
+        self._timeframe = label
+        for name, button in self.timeframe_buttons.items():
+            active = name == label
+            button.setChecked(active)
+            button.setProperty("timeframeActive", active)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        if self._raw_candles:
+            self._render_raw_candles()
+        self.timeframe_changed.emit(label)
+
+    def set_candle_objects(self, candles) -> None:
+        self._raw_candles = tuple(sorted(candles, key=lambda c: c.at))
+        if not self._raw_candles:
+            self.set_empty_message("No market data loaded.")
+            return
+        self._render_raw_candles()
+
+    def _auto_minutes(self) -> int:
+        if len(self._raw_candles) < 2:
+            return 1
+        span = self._raw_candles[-1].at - self._raw_candles[0].at
+        if span <= timedelta(minutes=45):
+            return 1
+        if span <= timedelta(hours=3):
+            return 3
+        if span <= timedelta(days=1):
+            return 5
+        if span <= timedelta(days=5):
+            return 15
+        if span <= timedelta(days=10):
+            return 30
+        return 60
+
+    def _render_raw_candles(self) -> None:
+        minutes = (
+            self._auto_minutes()
+            if self._timeframe == "Auto"
+            else TIMEFRAME_MINUTES[self._timeframe]
+        )
+        rows = self._aggregate(self._raw_candles, minutes)
+        self.set_candles(rows)
+
+    @staticmethod
+    def _aggregate(candles, minutes: int):
+        if minutes <= 1:
+            return [
+                (
+                    c.at.timestamp(),
+                    float(c.open),
+                    float(c.close),
+                    float(c.low),
+                    float(c.high),
+                )
+                for c in candles
+            ]
+        buckets: list[list] = []
+        current_key = None
+        current: list = []
+        for candle in candles:
+            local = candle.at.astimezone(INDIA_TIME)
+            minute_index = local.hour * 60 + local.minute
+            bucket_minute = (minute_index // minutes) * minutes
+            key = (local.date(), bucket_minute)
+            if current_key is None or key == current_key:
+                current.append(candle)
+                current_key = key
+            else:
+                buckets.append(current)
+                current = [candle]
+                current_key = key
+        if current:
+            buckets.append(current)
+        rows = []
+        for bucket in buckets:
+            first = bucket[0]
+            last = bucket[-1]
+            rows.append(
+                (
+                    first.at.timestamp(),
+                    float(first.open),
+                    float(last.close),
+                    float(min(c.low for c in bucket)),
+                    float(max(c.high for c in bucket)),
+                )
+            )
+        return rows
+
+    def set_candles(
+        self,
+        rows: list[tuple[float, float, float, float, float]],
+    ) -> None:
         self.plot.clear()
         self.plot.showAxis("left")
         self.plot.showAxis("bottom")
-        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        self.plot.showGrid(x=True, y=True, alpha=0.08)
         self.plot.setMouseEnabled(x=True, y=True)
         self.candles.set_data(rows)
         self.plot.addItem(self.candles)
@@ -328,4 +592,3 @@ class MarketChart(Card):
         label = pg.TextItem(message, anchor=(0.5, 0.5), color="#7b858c")
         self.plot.addItem(label)
         label.setPos(0.5, 0.5)
-

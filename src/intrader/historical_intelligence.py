@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Sequence
 
 from intrader.context import NewsItem, ScheduledEvent
+from intrader.global_news import market_relevance_score
 from intrader.historical import Candle, INDIA_TIME
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
@@ -166,7 +167,7 @@ def analyze_historical_range(
             moments.append(KeyMoment(
                 candle.at,
                 "PRICE_MOVE",
-                move,
+                min(move * Decimal(100), Decimal(100)),
                 f"Large one-minute move: {move:.3f}%",
                 f"O {candle.open} H {candle.high} L {candle.low} C {candle.close}",
             ))
@@ -193,7 +194,7 @@ def analyze_historical_range(
         moments.append(KeyMoment(
             trade.opened_at,
             "SHADOW_TRADE",
-            abs(outcome.adjusted_pnl),
+            min(abs(outcome.adjusted_pnl) / Decimal(100), Decimal(100)),
             f"{trade.action} shadow trade • P&L {outcome.adjusted_pnl}",
             f"{outcome.exit_reason}; MFE {outcome.mfe_amount}; MAE {outcome.mae_amount}",
         ))
@@ -208,13 +209,22 @@ def analyze_historical_range(
             f"Source {event.source}; category {event.category}",
         ))
 
-    for item in sorted(news_in, key=lambda n: n.published_at, reverse=True)[:5]:
+    ranked_news = sorted(
+        news_in,
+        key=lambda n: (
+            market_relevance_score(n.title, n.source),
+            n.published_at,
+        ),
+        reverse=True,
+    )
+    for item in ranked_news[:5]:
+        score = market_relevance_score(item.title, item.source)
         moments.append(KeyMoment(
             item.published_at,
             "NEWS_CONTEXT",
-            Decimal(20),
+            min(Decimal(score * 5), Decimal(50)),
             item.title,
-            f"Source {item.source}; context only, not treated as proven cause",
+            f"Source {item.source}; relevance score {score}; context only, not treated as proven cause",
         ))
 
     key_moments = tuple(sorted(

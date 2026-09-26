@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class StorageError(Exception):
@@ -306,6 +306,35 @@ class SQLiteStore:
                 BEFORE DELETE ON shadow_outcomes
                 BEGIN
                     SELECT RAISE(ABORT, 'shadow outcomes are immutable');
+                END;
+
+                CREATE TABLE IF NOT EXISTS reason_audits (
+                    trade_id TEXT NOT NULL,
+                    decision_id TEXT NOT NULL,
+                    auditor_version TEXT NOT NULL,
+                    thesis TEXT NOT NULL,
+                    reason_code TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    expected_direction INTEGER NOT NULL CHECK(expected_direction IN (-1, 0, 1)),
+                    verdict TEXT NOT NULL CHECK(verdict IN ('SUPPORTED', 'CONTRADICTED', 'FLAT', 'UNKNOWN', 'UNGRADED')),
+                    trade_result TEXT NOT NULL CHECK(trade_result IN ('PROFIT', 'LOSS', 'FLAT')),
+                    adjusted_pnl REAL NOT NULL,
+                    spot_change REAL,
+                    PRIMARY KEY (trade_id, auditor_version, thesis, reason_code),
+                    FOREIGN KEY (trade_id) REFERENCES shadow_trades(trade_id),
+                    FOREIGN KEY (decision_id) REFERENCES decision_records(decision_id)
+                );
+
+                CREATE TRIGGER IF NOT EXISTS reason_audits_no_update
+                BEFORE UPDATE ON reason_audits
+                BEGIN
+                    SELECT RAISE(ABORT, 'reason audits are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS reason_audits_no_delete
+                BEFORE DELETE ON reason_audits
+                BEGIN
+                    SELECT RAISE(ABORT, 'reason audits are immutable');
                 END;
                 """
             )
@@ -1212,6 +1241,93 @@ class SQLiteStore:
             if (trade := self.load_shadow_trade(str(row[0]))) is not None
         )
 
+    def store_reason_audits(self, audits) -> int:
+        """Insert versioned immutable reasoning audits idempotently."""
+
+        rows = [
+            (
+                audit.trade_id,
+                audit.decision_id,
+                audit.auditor_version,
+                audit.thesis,
+                audit.reason_code,
+                audit.category,
+                audit.expected_direction,
+                audit.verdict,
+                audit.trade_result,
+                float(audit.adjusted_pnl),
+                None if audit.spot_change is None else float(audit.spot_change),
+            )
+            for audit in audits
+        ]
+        if not rows:
+            return 0
+        try:
+            with self._connection:
+                before = self._connection.total_changes
+                self._connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO reason_audits (
+                        trade_id, decision_id, auditor_version, thesis,
+                        reason_code, category, expected_direction, verdict,
+                        trade_result, adjusted_pnl, spot_change
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                inserted = self._connection.total_changes - before
+        except sqlite3.Error:
+            raise StorageError("SQLite reason audit write failed") from None
+        return int(inserted)
+
+    def load_reason_audits(
+        self,
+        *,
+        trade_id: str | None = None,
+        auditor_version: str | None = None,
+    ):
+        clauses: list[str] = []
+        params: list[object] = []
+        if trade_id is not None:
+            clauses.append("trade_id = ?")
+            params.append(trade_id)
+        if auditor_version is not None:
+            clauses.append("auditor_version = ?")
+            params.append(auditor_version)
+
+        query = (
+            "SELECT trade_id, decision_id, auditor_version, thesis, "
+            "reason_code, category, expected_direction, verdict, trade_result, "
+            "adjusted_pnl, spot_change FROM reason_audits"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY trade_id, thesis, reason_code"
+
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite reason audit read failed") from None
+
+        from intrader.reasoning_auditor import ReasonAudit
+
+        return tuple(
+            ReasonAudit(
+                trade_id=str(row[0]),
+                decision_id=str(row[1]),
+                auditor_version=str(row[2]),
+                thesis=str(row[3]),
+                reason_code=str(row[4]),
+                category=str(row[5]),
+                expected_direction=int(row[6]),
+                verdict=str(row[7]),
+                trade_result=str(row[8]),
+                adjusted_pnl=Decimal(str(row[9])),
+                spot_change=None if row[10] is None else Decimal(str(row[10])),
+            )
+            for row in rows
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -1469,7 +1585,7 @@ class SQLiteStore:
             "index_snapshots", "future_snapshots", "breadth_snapshots",
             "news_items", "scheduled_events", "decision_records",
             "decision_families", "decision_reasons", "shadow_trades",
-            "shadow_outcomes",
+            "shadow_outcomes", "reason_audits",
         }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

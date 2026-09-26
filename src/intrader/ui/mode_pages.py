@@ -673,13 +673,34 @@ class AnalysisModePage(QWidget):
         self.drawdown.set_value(str(overall.max_drawdown), "negative" if overall.max_drawdown > 0 else "neutral")
         self.trades.set_value(str(overall.trades))
 
-        equity = float(snapshot.starting_capital)
-        ys = [equity]
-        for _decision, _trade, outcome in completed_bundles:
-            equity += float(outcome.adjusted_pnl)
-            ys.append(equity)
         self.equity_plot.clear()
-        self.equity_plot.plot(list(range(len(ys))), ys, pen=pg.mkPen("#5f8d9c", width=2))
+        if not completed_bundles:
+            self.equity_plot.hideAxis("left")
+            self.equity_plot.hideAxis("bottom")
+            self.equity_plot.showGrid(x=False, y=False)
+            self.equity_plot.setXRange(0, 1, padding=0)
+            self.equity_plot.setYRange(0, 1, padding=0)
+            empty = pg.TextItem(
+                f"No completed shadow trades yet.\nStarting shadow capital: ₹{snapshot.starting_capital}",
+                anchor=(0.5, 0.5),
+                color="#7b858c",
+            )
+            self.equity_plot.addItem(empty)
+            empty.setPos(0.5, 0.5)
+        else:
+            self.equity_plot.showAxis("left")
+            self.equity_plot.showAxis("bottom")
+            self.equity_plot.showGrid(x=True, y=True, alpha=0.12)
+            equity = float(snapshot.starting_capital)
+            ys = [equity]
+            for _decision, _trade, outcome in completed_bundles:
+                equity += float(outcome.adjusted_pnl)
+                ys.append(equity)
+            self.equity_plot.plot(
+                list(range(len(ys))),
+                ys,
+                pen=pg.mkPen("#5f8d9c", width=2),
+            )
 
         self.action_table.set_rows([[name, m.trades, _text(m.win_rate), m.adjusted_pnl, _text(m.expectancy)] for name, m in snapshot.by_action])
         self.regime_table.set_rows([[name, m.trades, _text(m.win_rate), m.adjusted_pnl, _text(m.expectancy)] for name, m in snapshot.by_regime])

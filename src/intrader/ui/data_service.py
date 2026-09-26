@@ -90,7 +90,7 @@ class DesktopDataService:
     def news_for_window(self, start: datetime, end: datetime) -> tuple:
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             return ()
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             return store.load_news_items(start=start, end=end)
 
     def records_manager(self):
@@ -99,21 +99,21 @@ class DesktopDataService:
             return build_records_manager(store)
 
     def decisions_for_day(self, day: date) -> tuple[DecisionRecord, ...]:
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             return tuple(
                 decision for decision in store.load_decision_records()
                 if decision.session_date == day
             )
 
     def completed_for_day(self, day: date) -> tuple:
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             return tuple(
                 bundle for bundle in store.load_completed_shadow_bundles()
                 if bundle[0].session_date == day
             )
 
     def reason_audits(self) -> tuple:
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             return store.load_reason_audits()
 
     def load_nifty_candles(self, day: date) -> tuple[Candle, ...]:
@@ -184,7 +184,7 @@ class DesktopDataService:
         if end - start > timedelta(days=30, minutes=1):
             raise ValueError("candle range is limited to 30 days")
 
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             existing = store.load_primary_index_candles(
                 "ONE_MINUTE",
                 start=start,
@@ -253,7 +253,7 @@ class DesktopDataService:
 
         candles = self.load_nifty_candle_range(start, end, backfill_missing=False)
 
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             decisions = tuple(
                 d for d in store.load_decision_records()
                 if start <= d.decided_at.astimezone(start.tzinfo) <= end
@@ -298,7 +298,7 @@ class DesktopDataService:
         if opening_as_of < reference_close:
             opening_as_of = reference_close
 
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             post_close_news = store.load_news_items(
                 start=reference_close,
                 end=opening_as_of,
@@ -342,7 +342,7 @@ class DesktopDataService:
             as_of=day,
             session=session,
         )
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             before = store.count("decision_records")
             record = reanalyze_stored_decision(
                 store,
@@ -364,7 +364,7 @@ class DesktopDataService:
             end,
             backfill_missing=False,
         )
-        with SQLiteStore(self.database_path) as store:
+        with SQLiteStore(self.database_path, read_only=True) as store:
             decisions = tuple(
                 decision
                 for decision in store.load_decision_records()

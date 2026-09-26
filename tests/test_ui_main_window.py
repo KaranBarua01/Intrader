@@ -17,6 +17,8 @@ def _window(monkeypatch):
     monkeypatch.setattr(utility_pages, "QWebEngineView", None)
     monkeypatch.setattr(MainWindow, "refresh_all", lambda self: None)
     window = MainWindow()
+    window.show()
+    app.processEvents()
     return app, window
 
 

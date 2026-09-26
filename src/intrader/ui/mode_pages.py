@@ -14,8 +14,8 @@ import pyqtgraph as pg
 
 from intrader.historical import INDIA_TIME
 from intrader.ui.components import (
-    Card, DataTable, DecisionCard, MarketChart, MetricCard, MetricRibbon,
-    ReasonList, ResponsiveMetricGrid, TextPanel,
+    BEARISH_COLOR, BULLISH_COLOR, Card, DataTable, DecisionCard, MarketChart,
+    MetricCard, MetricRibbon, ReasonList, ResponsiveMetricGrid, TextPanel,
 )
 
 
@@ -73,7 +73,20 @@ class OpeningScenarioPanel(Card):
 
     def _set_row(self, key: str, value, tone: str = "neutral") -> None:
         numeric = max(0.0, min(100.0, float(value)))
-        self._bars[key].setValue(round(numeric * 10))
+        bar = self._bars[key]
+        bar.setValue(round(numeric * 10))
+        bar_color = (
+            BULLISH_COLOR
+            if tone == "positive"
+            else BEARISH_COLOR
+            if tone == "negative"
+            else "#8daab4"
+        )
+        bar.setStyleSheet(
+            "QProgressBar{background:#edf0f1;border:none;border-radius:4px;"
+            "min-height:8px;max-height:8px;}"
+            f"QProgressBar::chunk{{background:{bar_color};border-radius:4px;}}"
+        )
         label = self._values[key]
         label.setText(f"{numeric:.1f}%")
         label.setObjectName(

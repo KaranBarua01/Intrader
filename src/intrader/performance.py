@@ -195,3 +195,16 @@ def build_records_manager_snapshot(
         ),
         reasons=_reason_performance(audits),
     )
+
+
+
+def summarize_performance(
+    rows: Sequence[tuple[DecisionRecord, ShadowTrade, ShadowOutcome]],
+    *,
+    starting_capital: Decimal = Decimal("100000"),
+) -> PerformanceMetrics:
+    """Public deterministic performance summary used by calibration/promotion."""
+
+    if starting_capital <= 0:
+        raise ValueError("starting capital must be positive")
+    return _metrics(rows, starting_capital)

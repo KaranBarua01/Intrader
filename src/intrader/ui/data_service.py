@@ -62,7 +62,28 @@ class DesktopDataService:
             database_counts=tuple(counts),
         )
 
-    def refresh_global_news(\n        self,\n        start: datetime | None = None,\n        end: datetime | None = None,\n    ) -> int:\n        """Fetch global market headlines and cache them locally."""\n\n        end = end or datetime.now(INDIA_TIME)\n        start = start or (end - timedelta(hours=24))\n        items = fetch_global_market_news(start, end)\n        if not items:\n            return 0\n        with SQLiteStore(self.database_path) as store:\n            return store.store_news_items(items)\n\n    def news_for_window(self, start: datetime, end: datetime) -> tuple:\n        if start.tzinfo is None or end.tzinfo is None or start >= end:\n            return ()\n        with SQLiteStore(self.database_path) as store:\n            return store.load_news_items(start=start, end=end)\n    def records_manager(self):
+    def refresh_global_news(
+        self,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> int:
+        """Fetch global market headlines and cache them locally."""
+
+        end = end or datetime.now(INDIA_TIME)
+        start = start or (end - timedelta(hours=24))
+        items = fetch_global_market_news(start, end)
+        if not items:
+            return 0
+        with SQLiteStore(self.database_path) as store:
+            return store.store_news_items(items)
+
+    def news_for_window(self, start: datetime, end: datetime) -> tuple:
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            return ()
+        with SQLiteStore(self.database_path) as store:
+            return store.load_news_items(start=start, end=end)
+
+    def records_manager(self):
         from intrader.records_manager_pipeline import build_records_manager
         with SQLiteStore(self.database_path) as store:
             return build_records_manager(store)

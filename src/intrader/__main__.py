@@ -15,6 +15,7 @@ from intrader.breadth_provider import (
     fetch_nifty50_constituents,
     resolve_breadth_members,
 )
+from intrader.calibration_pipeline import run_calibration, run_promotion_gate
 from intrader.checkpoint2 import MarketAccessError, check_market_access
 from intrader.config import load_config
 from intrader.context_pipeline import refresh_context
@@ -814,6 +815,70 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if argv == ["calibrate-shadow"]:
+        try:
+            with SQLiteStore(_database_path()) as db_store:
+                report = run_calibration(db_store)
+        except Exception:
+            print("CALIBRATION: PENDING")
+            print("Reason: INSUFFICIENT_OR_INVALID_SHADOW_HISTORY")
+            return 0
+
+        candidate = report.candidate
+        print("CALIBRATION REPORT")
+        print(f"Report ID: {report.report_id}")
+        print(f"Version: {report.calibration_version}")
+        print(f"Source Brain: {report.source_brain_version}")
+        print(f"Source Rules: {report.source_rule_version}")
+        print(
+            "Candidate thresholds: "
+            f"|Direction| >= {candidate.direction_min}, "
+            f"Confidence >= {candidate.confidence_min}, "
+            f"Entry >= {candidate.entry_quality_min}, "
+            f"Risk <= {candidate.reversal_risk_max}"
+        )
+        print(
+            f"TRAIN: trades {report.train_metrics.trades}, "
+            f"expectancy {report.train_metrics.expectancy}, "
+            f"P&L {report.train_metrics.adjusted_pnl}"
+        )
+        print(
+            f"VALIDATION: trades {report.validation_metrics.trades}, "
+            f"expectancy {report.validation_metrics.expectancy}, "
+            f"P&L {report.validation_metrics.adjusted_pnl}"
+        )
+        print(
+            f"TEST: trades {report.test_metrics.trades}, "
+            f"expectancy {report.test_metrics.expectancy}, "
+            f"P&L {report.test_metrics.adjusted_pnl}, "
+            f"PF {report.test_metrics.profit_factor}, "
+            f"drawdown {report.test_metrics.max_drawdown_pct}%"
+        )
+        print(f"Limitation: {report.limitation}")
+        print("No thresholds were changed.")
+        return 0
+
+    if argv == ["promotion-gate"]:
+        try:
+            with SQLiteStore(_database_path()) as db_store:
+                calibration, promotion = run_promotion_gate(db_store)
+        except Exception:
+            print("PROMOTION GATE: PENDING")
+            print("Reason: INSUFFICIENT_OR_INVALID_SHADOW_HISTORY")
+            return 0
+
+        print(f"PROMOTION GATE: {promotion.status}")
+        print(f"Promotion ID: {promotion.promotion_id}")
+        print(f"Calibration report: {calibration.report_id}")
+        print(f"Version: {promotion.promotion_version}")
+        if promotion.reasons:
+            for reason in promotion.reasons:
+                print(f"- {reason}")
+        else:
+            print("- All configured engineering gates passed.")
+        print("No production rules were changed.")
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -935,7 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate]"
         )
         return 2
 

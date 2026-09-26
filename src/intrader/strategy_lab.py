@@ -74,6 +74,13 @@ class StrategyLabSnapshot:
 
 STRATEGIES = (
     StrategyDefinition(
+        "DOUGLAS_PROCESS_DISCIPLINE",
+        "Mark Douglas / Trading Psychology",
+        "Process Discipline",
+        "Psychology/process hypothesis; requires decision/override logs rather than candle prediction.",
+        "PROCESS",
+    ),
+    StrategyDefinition(
         "NISON_BULLISH_ENGULFING",
         "Steve Nison / Candlestick",
         "Bullish Engulfing",
@@ -456,6 +463,7 @@ def _squeeze_release(candles: Sequence[Candle]) -> list[tuple[int, int]]:
 
 
 _DETECTORS: dict[str, Callable[[Sequence[Candle]], list[tuple[int, int]]]] = {
+    "DOUGLAS_PROCESS_DISCIPLINE": lambda _candles: [],
     "NISON_BULLISH_ENGULFING": lambda candles: _engulfing(candles, True),
     "NISON_BEARISH_ENGULFING": lambda candles: _engulfing(candles, False),
     "NISON_HAMMER": lambda candles: _hammer_or_star(candles, True),

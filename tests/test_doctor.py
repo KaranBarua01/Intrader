@@ -14,7 +14,14 @@ class MemorySecrets:
         self.values[name] = value
 
 
-def test_doctor_reports_ready_environment(tmp_path) -> None:
+def test_doctor_reports_ready_environment(tmp_path, monkeypatch) -> None:
+    class FakeWindowsKeyring:
+        pass
+
+    FakeWindowsKeyring.__module__ = "keyring.backends.Windows"
+    FakeWindowsKeyring.__name__ = "WinVaultKeyring"
+    monkeypatch.setattr(doctor.keyring, "get_keyring", lambda: FakeWindowsKeyring())
+
     secrets = MemorySecrets(
         {
             "api_key": "dummy-api-key", "client_code": "dummy-client-code",

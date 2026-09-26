@@ -281,6 +281,16 @@ class TimeTravelPage(QWidget):
         self.preset_5d.clicked.connect(lambda: self._apply_range_preset(days=5))
         self.preset_10d.clicked.connect(lambda: self._apply_range_preset(days=10))
         self.preset_30d.clicked.connect(lambda: self._apply_range_preset(days=30))
+        for editor in (
+            self.range_from_day,
+            self.range_to_day,
+        ):
+            editor.dateChanged.connect(lambda _value: self._mark_range_stale())
+        for editor in (
+            self.range_from_time,
+            self.range_to_time,
+        ):
+            editor.timeChanged.connect(lambda _value: self._mark_range_stale())
         self.key_moments.cellDoubleClicked.connect(self._open_key_moment)
 
     def _build_replay_tab(self) -> None:
@@ -413,6 +423,9 @@ class TimeTravelPage(QWidget):
         ):
             preset_row.addWidget(button)
         preset_row.addStretch(1)
+        self.range_state = QLabel("No range analyzed yet.")
+        self.range_state.setObjectName("Muted")
+        preset_row.addWidget(self.range_state)
         range_root.addLayout(preset_row)
 
         self.range_change = MetricCard("NIFTY CHANGE", "N/A")
@@ -533,6 +546,10 @@ class TimeTravelPage(QWidget):
             self.detail_tabs.setMinimumHeight(190)
             self.replay_details.setMaximumHeight(190)
 
+    def _mark_range_stale(self) -> None:
+        if hasattr(self, "range_state"):
+            self.range_state.setText("Inputs changed • Analyze Period to refresh")
+
     def selected_day(self) -> date:
         return self.day.date().toPython()
 
@@ -625,6 +642,11 @@ class TimeTravelPage(QWidget):
         ])
 
     def set_range_analysis(self, analysis, opening, candles) -> None:
+        self.range_state.setText(
+            f"Analyzed {analysis.start.astimezone(INDIA_TIME):%d %b %H:%M} → "
+            f"{analysis.end.astimezone(INDIA_TIME):%d %b %H:%M} • "
+            f"{analysis.candle_count:,} candles"
+        )
         self.range_change.set_value(
             "N/A" if analysis.change_pct is None else f"{analysis.change_pct:.3f}%",
             _tone(analysis.change_pct),

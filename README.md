@@ -248,3 +248,130 @@ Diagnostic:
 ```
 
 Intrader still contains no broker order-placement, order-modification, order-cancellation or GTT execution path. All actual execution remains manual on the user's phone.
+
+
+## Phase 3 — Shadow Learning System
+
+Phase 3 lives on the `intrader-phase3` branch and keeps execution fully simulated.
+
+### Checkpoint 3.1 — Records Manager / Decision Ledger
+
+Every Market Brain evaluation can be frozen into an immutable decision record containing:
+
+- Brain/rule version
+- BUY_CALL / BUY_PUT / WAIT / NO_TRADE action
+- rejected opposite thesis
+- Direction / Entry Quality / Reversal Risk / Confidence
+- family evidence
+- price/futures/options/breadth/order-flow measurements
+- regime label
+- machine-readable reason codes
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader record-decision YYYY-MM-DD HH:MM
+```
+
+### Checkpoint 3.2 — Shadow Trader
+
+Actionable decisions open one simulated nearest-ATM option position using `shadow-v0.1`:
+
+- one lot
+- 20% shadow stop
+- 30% shadow target
+- 30-minute maximum horizon
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader shadow-step YYYY-MM-DD HH:MM
+```
+
+No broker order endpoint is used.
+
+### Checkpoint 3.3 — Outcome Engine
+
+After the full 30-minute observation horizon is available, Intrader records:
+
+- first target/stop/timeout exit
+- gross P&L
+- friction-adjusted shadow P&L
+- MFE / MAE
+- NIFTY move through exit
+- 1/3/5/10/15/30-minute option forward returns
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader settle-shadow TRADE_ID YYYY-MM-DD HH:MM
+```
+
+### Checkpoint 3.4 — Reasoning Auditor
+
+Each immutable reason is compared with the subsequent underlying move and trade result using `auditor-v0.1`.
+
+Verdicts:
+
+- SUPPORTED
+- CONTRADICTED
+- FLAT
+- UNKNOWN
+- UNGRADED
+
+Command:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader audit-shadow TRADE_ID
+```
+
+These are associations/support checks, not causal claims.
+
+### Checkpoint 3.5 — Records Manager analytics
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader records-manager
+```
+
+The Records Manager reports:
+
+- current shadow equity
+- gross and adjusted P&L
+- wins / losses / win rate
+- expectancy
+- profit factor
+- maximum drawdown
+- winning / losing streaks
+- CALL vs PUT
+- regime breakdown
+- time-of-day breakdown
+- Brain-version breakdown
+- reason-code associations
+
+### Checkpoint 3.6 — Calibration
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader calibrate-shadow
+```
+
+`calibration-v0.1` uses a chronological 60/20/20 train/validation/test split and tests only baseline-or-stricter thresholds. Training selects a candidate; validation/test remain evaluation-only.
+
+Calibration never rewrites production thresholds automatically.
+
+### Checkpoint 3.7 — Promotion gate
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader promotion-gate
+```
+
+`promotion-v0.1` returns PASS or REJECT from untouched evaluation evidence. A PASS is only an engineering gate; promotion remains a human decision.
+
+### Integrity guarantees
+
+- pre-decision reasoning is immutable;
+- shadow entries are immutable;
+- terminal outcomes are immutable;
+- reasoning audits are versioned;
+- WAIT and NO_TRADE decisions are retained;
+- no order placement, modification, cancellation or GTT execution path exists;
+- calibration and promotion never auto-deploy.

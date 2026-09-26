@@ -48,6 +48,7 @@ class RangeAnalysisSnapshot:
     expectancy: Decimal | None
     news_count: int
     event_count: int
+    analysis_notes: tuple[str, ...]
     key_moments: tuple[KeyMoment, ...]
     coverage: tuple[tuple[str, str], ...]
 
@@ -205,10 +206,50 @@ def analyze_historical_range(
             f"Source {event.source}; category {event.category}",
         ))
 
+    for item in sorted(news_in, key=lambda n: n.published_at, reverse=True)[:5]:
+        moments.append(KeyMoment(
+            item.published_at,
+            "NEWS_CONTEXT",
+            Decimal(20),
+            item.title,
+            f"Source {item.source}; context only, not treated as proven cause",
+        ))
+
     key_moments = tuple(sorted(
         moments,
         key=lambda m: (-m.importance, m.at),
     )[:20])
+
+    notes: list[str] = []
+    if change_pct is not None:
+        direction_word = "rose" if change_pct > 0 else "fell" if change_pct < 0 else "finished flat"
+        notes.append(
+            f"NIFTY {direction_word} {abs(change_pct):.3f}% across {session_count} observed session(s)."
+        )
+    if regime_counts:
+        dominant_regime, dominant_count = max(
+            regime_counts.items(), key=lambda item: item[1]
+        )
+        notes.append(
+            f"Most common recorded regime: {dominant_regime} ({dominant_count} decision snapshots)."
+        )
+    if decision_counts:
+        mix = ", ".join(
+            f"{name} {count}" for name, count in sorted(decision_counts.items())
+        )
+        notes.append(f"Recorded decision mix: {mix}.")
+    if trade_count:
+        notes.append(
+            f"Shadow results: {wins} profitable, {losses} losing, adjusted P&L {adjusted_pnl}, expectancy {expectancy}."
+        )
+    if news_in or events_in:
+        notes.append(
+            f"Context present: {len(news_in)} cached news item(s) and {len(events_in)} scheduled event(s); these are timestamp context, not automatically treated as causes."
+        )
+    if key_moments:
+        notes.append(
+            f"Highest-ranked moment: {key_moments[0].kind} at {key_moments[0].at.astimezone(INDIA_TIME):%Y-%m-%d %H:%M} — {key_moments[0].summary}."
+        )
 
     coverage = (
         ("Candles", "AVAILABLE" if candles_in else "UNAVAILABLE"),
@@ -238,6 +279,7 @@ def analyze_historical_range(
         expectancy=expectancy,
         news_count=len(news_in),
         event_count=len(events_in),
+        analysis_notes=tuple(notes),
         key_moments=key_moments,
         coverage=coverage,
     )

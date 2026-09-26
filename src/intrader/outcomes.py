@@ -120,8 +120,12 @@ def evaluate_shadow_trade(
         raise OutcomeError("spot entry invalid")
 
     timeout_at = trade.opened_at + timedelta(minutes=trade.max_minutes)
-    observation_end = min(as_of, timeout_at)
-    rows = _ordered_option_history(trade, option_snapshots, observation_end)
+    if as_of < timeout_at:
+        raise OutcomePending("forward outcome horizon incomplete")
+
+    rows = _ordered_option_history(trade, option_snapshots, timeout_at)
+    if (timeout_at - rows[-1].exchange_at).total_seconds() > 30:
+        raise OutcomePending("forward outcome horizon incomplete")
 
     exit_row: OptionSnapshot | None = None
     exit_reason: str | None = None
@@ -136,8 +140,6 @@ def evaluate_shadow_trade(
             break
 
     if exit_row is None:
-        if as_of < timeout_at:
-            raise OutcomePending("shadow trade still open")
         terminal = [row for row in rows if row.exchange_at <= timeout_at]
         if not terminal:
             raise OutcomePending("shadow timeout data unavailable")

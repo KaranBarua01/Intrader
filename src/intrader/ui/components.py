@@ -192,14 +192,26 @@ class MarketChart(Card):
         self.layout_box.addWidget(self.plot)
 
     def set_candles(self, rows: list[tuple[float, float, float, float, float]]) -> None:
+        self.plot.clear()
+        self.plot.showAxis("left")
+        self.plot.showAxis("bottom")
+        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        self.plot.setMouseEnabled(x=True, y=True)
         self.candles.set_data(rows)
+        self.plot.addItem(self.candles)
         if rows:
             self.plot.enableAutoRange()
 
     def set_empty_message(self, message: str) -> None:
         self.plot.clear()
-        self.plot.addItem(self.candles)
+        self.candles.set_data([])
+        self.plot.hideAxis("left")
+        self.plot.hideAxis("bottom")
+        self.plot.showGrid(x=False, y=False)
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.setXRange(0, 1, padding=0)
+        self.plot.setYRange(0, 1, padding=0)
         label = pg.TextItem(message, anchor=(0.5, 0.5), color="#7b858c")
         self.plot.addItem(label)
-        label.setPos(0, 0)
+        label.setPos(0.5, 0.5)
 

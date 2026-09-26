@@ -446,6 +446,57 @@ class SQLiteStore:
             for row in rows
         )
 
+    def load_primary_index_candles(
+        self,
+        interval: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple["Candle", ...]:
+        """Load the dominant stored NSE index candle series without network access.
+
+        Intrader stores NIFTY spot and India VIX as NSE index candles. For a
+        requested window the NIFTY spot series is selected by row count, with
+        average close as a deterministic tie-breaker (NIFTY is materially above
+        VIX). This keeps Time Travel local-first and avoids authentication just
+        to discover a token already represented in SQLite.
+        """
+
+        clauses = ["exchange = ?", "interval = ?"]
+        params: list[object] = ["NSE", interval]
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("candle start timestamp must be timezone aware")
+            clauses.append("ts_utc >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("candle end timestamp must be timezone aware")
+            clauses.append("ts_utc <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("candle load range invalid")
+
+        query = (
+            "SELECT token, COUNT(*) AS n, AVG(close) AS avg_close "
+            "FROM candles WHERE "
+            + " AND ".join(clauses)
+            + " GROUP BY token ORDER BY n DESC, avg_close DESC LIMIT 1"
+        )
+        try:
+            row = self._connection.execute(query, params).fetchone()
+        except sqlite3.Error:
+            raise StorageError("SQLite primary index candle lookup failed") from None
+        if row is None:
+            return ()
+        return self.load_candles(
+            "NSE",
+            str(row[0]),
+            interval,
+            start=start,
+            end=end,
+        )
+
     def load_option_snapshots(
         self,
         *,

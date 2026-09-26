@@ -48,6 +48,8 @@ def test_time_travel_exposes_replay_range_and_reanalysis_controls() -> None:
     assert "Range Analysis" in page.tabs.tabText(1)
     assert page.reanalyze_button.text() == "Re-analyze with Current Brain"
     assert page.range_load_button.text() == "Analyze Period"
+    assert page.range_enrich_button.text() == "Fetch Missing"
+    assert page.replay_enrich_button.text() == "Fetch Missing"
 
 
 def test_market_chart_empty_state_hides_meaningless_axes() -> None:
@@ -94,7 +96,7 @@ def test_time_travel_range_results_render_without_fake_data() -> None:
     assert page.range_change.value_label.text() == "N/A"
     assert page.range_sessions.value_label.text() == "0"
     assert page.range_coverage.rowCount() == 1
-    assert page.range_notes.rowCount() == 1
+    assert "No evidence available." in page.range_notes.text.toPlainText()
 
 
 
@@ -121,4 +123,33 @@ def test_strategy_lab_is_separate_research_mode() -> None:
     assert page.total_signals.value_label.text() == "0"
     assert page.active_strategies.value_label.text() == "0"
     assert page.best_hit.value_label.text() == "N/A"
-    assert page.notes.rowCount() == 1
+    assert "LAB ONLY" in page.notes.text.toPlainText()
+
+
+
+def test_time_travel_uses_real_timestamp_chart_coordinates() -> None:
+    from datetime import datetime
+    from decimal import Decimal
+    from intrader.historical import Candle, INDIA_TIME
+
+    app = QApplication.instance() or QApplication([])
+    page = TimeTravelPage()
+    candle = Candle(
+        datetime(2026, 9, 25, 10, 0, tzinfo=INDIA_TIME),
+        Decimal("23000"),
+        Decimal("23010"),
+        Decimal("22990"),
+        Decimal("23005"),
+        1000,
+    )
+    page.set_session_data((), (), (candle,), ())
+    bounds = page.chart.candles.boundingRect()
+
+    assert bounds.left() > 1_000_000_000
+
+
+def test_strategy_lab_has_explicit_fetch_missing_control() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = StrategyLabPage()
+
+    assert page.fetch_button.text() == "Fetch Missing"

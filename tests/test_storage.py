@@ -8,6 +8,7 @@ from intrader.historical import Candle, OIObservation
 from intrader.instruments import Instrument, NiftyInstruments
 from intrader.market_brain import FamilyEvidence
 from intrader.records import DecisionReason, DecisionRecord
+from intrader.shadow import ShadowTrade
 from intrader.storage import MarketSnapshotSink, OptionSnapshotSink, SQLiteStore, StorageError
 from intrader.stream_protocol import DepthLevel, MarketTick
 
@@ -55,7 +56,7 @@ def test_schema_initializes_twice_with_wal_and_reopens(tmp_path) -> None:
     store.initialize()
 
     assert store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 6
     store.store_candles(_bundle().spot, "ONE_MINUTE", [_candle()])
     store.close()
 
@@ -356,4 +357,43 @@ def test_decision_ledger_is_idempotent_and_immutable(tmp_path) -> None:
             store._connection.execute(
                 "DELETE FROM decision_reasons WHERE decision_id = ?",
                 (record.decision_id,),
+            )
+
+
+
+def test_shadow_trade_entry_is_idempotent_and_immutable(tmp_path) -> None:
+    decision = _decision_record()
+    trade = ShadowTrade(
+        trade_id="SHD-TEST-1",
+        decision_id=decision.decision_id,
+        shadow_version="shadow-v0.1",
+        opened_at=NOW,
+        action="BUY_CALL",
+        token="call",
+        strike=Decimal("23150"),
+        option_type="CE",
+        entry_price=Decimal("100"),
+        quantity=65,
+        lot_size=65,
+        lots=1,
+        stop_price=Decimal("80"),
+        target_price=Decimal("130"),
+        max_minutes=30,
+    )
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        store.store_decision_record(decision)
+        assert store.store_shadow_trade(trade) is True
+        assert store.store_shadow_trade(trade) is False
+        assert store.count("shadow_trades") == 1
+
+        loaded = store.load_shadow_trade(trade.trade_id)
+        assert loaded == trade
+        assert store.load_shadow_trade_for_decision(decision.decision_id) == trade
+
+        with pytest.raises(sqlite3.IntegrityError):
+            store._connection.execute(
+                "UPDATE shadow_trades SET entry_price = 999 "
+                "WHERE trade_id = ?",
+                (trade.trade_id,),
             )

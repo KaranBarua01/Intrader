@@ -547,7 +547,11 @@ class MarketChart(Card):
         for candle in candles:
             local = candle.at.astimezone(INDIA_TIME)
             minute_index = local.hour * 60 + local.minute
-            bucket_minute = (minute_index // minutes) * minutes
+            session_anchor = 9 * 60 + 15
+            bucket_minute = (
+                ((minute_index - session_anchor) // minutes) * minutes
+                + session_anchor
+            )
             key = (local.date(), bucket_minute)
             if current_key is None or key == current_key:
                 current.append(candle)

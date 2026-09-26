@@ -48,9 +48,10 @@ class DesktopDataService:
             )
             counts = []
             for table in (
-                "candles", "option_snapshots", "index_snapshots",
-                "future_snapshots", "breadth_snapshots", "decision_records",
-                "shadow_trades", "shadow_outcomes", "reason_audits",
+                "candles", "oi_observations", "option_snapshots", "index_snapshots",
+                "future_snapshots", "breadth_snapshots", "news_items",
+                "scheduled_events", "decision_records", "shadow_trades",
+                "shadow_outcomes", "reason_audits",
             ):
                 try:
                     counts.append((table, store.count(table)))
@@ -168,14 +169,23 @@ class DesktopDataService:
         start: datetime,
         end: datetime,
         *,
-        backfill_missing: bool = True,
+        backfill_missing: bool = False,
     ) -> tuple[Candle, ...]:
-        """Load/backfill up to 30 calendar days of NIFTY one-minute candles."""
+        """Load NIFTY candles locally; network backfill is explicit opt-in."""
 
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValueError("candle range invalid")
         if end - start > timedelta(days=30, minutes=1):
             raise ValueError("candle range is limited to 30 days")
+
+        with SQLiteStore(self.database_path) as store:
+            existing = store.load_primary_index_candles(
+                "ONE_MINUTE",
+                start=start,
+                end=end,
+            )
+        if not backfill_missing:
+            return existing
 
         credential_store = CredentialStore()
         transport = RequestsTransport()
@@ -190,15 +200,6 @@ class DesktopDataService:
         spot = market.instruments.spot
 
         with SQLiteStore(self.database_path) as store:
-            existing = store.load_candles(
-                spot.exchange,
-                spot.token,
-                "ONE_MINUTE",
-                start=start,
-                end=end,
-            )
-            if not backfill_missing:
-                return existing
 
             existing_days = {
                 candle.at.astimezone(INDIA_TIME).date()
@@ -242,10 +243,9 @@ class DesktopDataService:
             )
 
     def analyze_time_range(self, start: datetime, end: datetime):
-        """Build range intelligence plus a pre-open scenario snapshot."""
+        """Build read-only range intelligence from locally cached data."""
 
-        candles = self.load_nifty_candle_range(start, end, backfill_missing=True)
-        self.refresh_global_news_range(start, end)
+        candles = self.load_nifty_candle_range(start, end, backfill_missing=False)
 
         with SQLiteStore(self.database_path) as store:
             decisions = tuple(
@@ -258,9 +258,24 @@ class DesktopDataService:
             )
             news = store.load_news_items(start=start, end=end)
             events = store.load_scheduled_events(start=start, end=end)
+            coverage_counts = {
+                "Candles": len(candles),
+                "Options": len(store.load_option_snapshots(start=start, end=end)),
+                "Futures": len(store.load_future_snapshots(start=start, end=end)),
+                "VIX / Index": len(store.load_index_snapshots(start=start, end=end)),
+                "Breadth": len(store.load_breadth_snapshots(start=start, end=end)),
+                "Order flow": sum(
+                    1 for d in decisions if d.depth_imbalance is not None
+                ),
+                "Recorded decisions": len(decisions),
+                "Shadow outcomes": len(bundles),
+                "Global/news context": len(news),
+                "Scheduled events": len(events),
+            }
 
         analysis = analyze_historical_range(
-            candles, decisions, bundles, news, events, start, end
+            candles, decisions, bundles, news, events, start, end,
+            coverage_counts=coverage_counts,
         )
 
         reference_close = (
@@ -276,11 +291,6 @@ class DesktopDataService:
         opening_as_of = min(now, pre_open)
         if opening_as_of < reference_close:
             opening_as_of = reference_close
-
-        try:
-            self.refresh_global_news_range(reference_close, opening_as_of)
-        except Exception:
-            pass
 
         with SQLiteStore(self.database_path) as store:
             post_close_news = store.load_news_items(
@@ -301,6 +311,14 @@ class DesktopDataService:
             as_of=opening_as_of,
         )
         return analysis, opening, candles, news, events
+
+    def enrich_time_range(self, start: datetime, end: datetime) -> tuple[int, int]:
+        """Explicitly fetch missing candles/news for a historical range."""
+
+        before = self.load_nifty_candle_range(start, end, backfill_missing=False)
+        after = self.load_nifty_candle_range(start, end, backfill_missing=True)
+        inserted_news = self.refresh_global_news_range(start, end)
+        return max(0, len(after) - len(before)), inserted_news
 
     def reanalyze_timestamp(self, at: datetime):
         """Run the current Brain against stored historical data without writes."""
@@ -338,7 +356,7 @@ class DesktopDataService:
         candles = self.load_nifty_candle_range(
             start,
             end,
-            backfill_missing=True,
+            backfill_missing=False,
         )
         with SQLiteStore(self.database_path) as store:
             decisions = tuple(

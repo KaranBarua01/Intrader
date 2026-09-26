@@ -4,19 +4,18 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from math import ceil
 
 from PySide6.QtCore import QDate, QTime, QTimer, Qt
 from PySide6.QtWidgets import (
-    QDateEdit, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSlider,
-    QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
+    QDateEdit, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+    QSlider, QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
 )
 import pyqtgraph as pg
 
 from intrader.historical import INDIA_TIME
 from intrader.ui.components import (
-    Card, DataTable, DecisionCard, MarketChart, MetricCard, ReasonList,
-    ResponsiveMetricGrid, TextPanel,
+    Card, DataTable, DecisionCard, MarketChart, MetricCard, MetricRibbon,
+    ReasonList, ResponsiveMetricGrid, TextPanel,
 )
 
 
@@ -30,42 +29,82 @@ def _text(value) -> str:
     return "N/A" if value is None else str(value)
 
 
-def _chart_rows(
-    candles,
-    *,
-    max_points: int | None = None,
-) -> list[tuple[float, float, float, float, float]]:
-    ordered = list(candles)
-    if not ordered:
-        return []
-    if max_points is None or len(ordered) <= max_points:
-        return [
-            (
-                c.at.timestamp(),
-                float(c.open),
-                float(c.close),
-                float(c.low),
-                float(c.high),
-            )
-            for c in ordered
-        ]
+class OpeningScenarioPanel(Card):
+    """Dense next-session scenario summary for one-screen Time Travel."""
 
-    step = max(1, ceil(len(ordered) / max_points))
-    rows = []
-    for offset in range(0, len(ordered), step):
-        chunk = ordered[offset : offset + step]
-        first = chunk[0]
-        last = chunk[-1]
-        rows.append(
-            (
-                last.at.timestamp(),
-                float(first.open),
-                float(last.close),
-                float(min(c.low for c in chunk)),
-                float(max(c.high for c in chunk)),
-            )
+    def __init__(self) -> None:
+        super().__init__("Opening possibilities")
+        self._bars: dict[str, QProgressBar] = {}
+        self._values: dict[str, QLabel] = {}
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
+        for row, (key, label) in enumerate((
+            ("bullish", "Bullish"),
+            ("balanced", "Balanced"),
+            ("bearish", "Bearish"),
+            ("gap", "Gap risk"),
+        )):
+            name = QLabel(label)
+            name.setObjectName("Muted")
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setTextVisible(False)
+            value = QLabel("N/A")
+            value.setMinimumWidth(48)
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(name, row, 0)
+            grid.addWidget(bar, row, 1)
+            grid.addWidget(value, row, 2)
+            self._bars[key] = bar
+            self._values[key] = value
+        self.layout_box.addLayout(grid)
+
+        self.meta = QLabel("Scenario weights only — not calibrated probabilities.")
+        self.meta.setWordWrap(True)
+        self.meta.setObjectName("Muted")
+        self.layout_box.addWidget(self.meta)
+
+        self.drivers = QLabel("No opening evidence available for this selection.")
+        self.drivers.setWordWrap(True)
+        self.drivers.setObjectName("Muted")
+        self.layout_box.addWidget(self.drivers, 1)
+
+    def _set_row(self, key: str, value, tone: str = "neutral") -> None:
+        numeric = max(0.0, min(100.0, float(value)))
+        self._bars[key].setValue(round(numeric * 10))
+        label = self._values[key]
+        label.setText(f"{numeric:.1f}%")
+        label.setObjectName(
+            "Positive" if tone == "positive" else "Negative" if tone == "negative" else "MetricValue"
         )
-    return rows
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def set_snapshot(self, opening) -> None:
+        self._set_row("bullish", opening.bullish_weight, "positive")
+        self._set_row("balanced", opening.balanced_weight)
+        self._set_row("bearish", opening.bearish_weight, "negative")
+        self._set_row(
+            "gap",
+            opening.gap_risk,
+            "negative" if opening.gap_risk >= 60 else "neutral",
+        )
+        self.meta.setText(
+            f"Next: {opening.next_session_candidate}  •  "
+            f"Bias {opening.bias_score:.1f}  •  "
+            f"Coverage {opening.evidence_coverage:.0f}%\n"
+            "Scenario weights only — not calibrated probabilities."
+        )
+        evidence = list(opening.drivers[:6])
+        if opening.limitations:
+            evidence.append(f"Limit: {opening.limitations[0]}")
+        self.drivers.setText(
+            "\n".join(f"• {item}" for item in evidence)
+            if evidence
+            else "No opening evidence available for this selection."
+        )
 
 
 class IntraderModePage(QWidget):
@@ -86,24 +125,22 @@ class IntraderModePage(QWidget):
         root.addLayout(title_row)
 
         self.decision = DecisionCard()
-        self.direction = MetricCard("DIRECTION", "N/A")
-        self.confidence = MetricCard("CONFIDENCE", "N/A")
-        self.entry = MetricCard("ENTRY QUALITY", "N/A")
-        self.risk = MetricCard("REVERSAL RISK", "N/A")
-        self.regime = MetricCard("REGIME", "N/A")
+        self.metrics = MetricRibbon([
+            ("DIRECTION", "N/A"),
+            ("CONFIDENCE", "N/A"),
+            ("ENTRY", "N/A"),
+            ("REVERSAL", "N/A"),
+            ("REGIME", "N/A"),
+        ])
 
         top = QHBoxLayout()
         top.addWidget(self.decision, 2)
-        self.metrics = ResponsiveMetricGrid(
-            [self.direction, self.confidence, self.entry, self.risk, self.regime],
-            compact_height=76,
-        )
         top.addWidget(self.metrics, 5)
         root.addLayout(top)
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.chart = MarketChart()
-        self.chart.setMinimumHeight(330)
+        self.chart.setMinimumHeight(255)
         self.main_splitter.addWidget(self.chart)
 
         right_widget = QWidget()
@@ -121,8 +158,8 @@ class IntraderModePage(QWidget):
         self.news.add_widget(self.news_table)
         right.addWidget(self.news, 1)
         self.main_splitter.addWidget(right_widget)
-        self.main_splitter.setStretchFactor(0, 7)
-        self.main_splitter.setStretchFactor(1, 3)
+        self.main_splitter.setStretchFactor(0, 6)
+        self.main_splitter.setStretchFactor(1, 4)
         root.addWidget(self.main_splitter, 1)
 
         self.reason_tabs = QTabWidget()
@@ -163,14 +200,8 @@ class IntraderModePage(QWidget):
                 "WAITING FOR DATA",
                 "No immutable Market Brain decision recorded yet.",
             )
-            for card in (
-                self.direction,
-                self.confidence,
-                self.entry,
-                self.risk,
-                self.regime,
-            ):
-                card.set_value("N/A")
+            for key in ("DIRECTION", "CONFIDENCE", "ENTRY", "REVERSAL", "REGIME"):
+                self.metrics.set_metric(key, "N/A")
             self.why.set_reasons([])
             self.why_not.set_reasons([])
         else:
@@ -178,16 +209,19 @@ class IntraderModePage(QWidget):
                 decision.action,
                 f"{decision.brain_state} • {decision.brain_version}",
             )
-            self.direction.set_value(
-                str(decision.direction_score), _tone(decision.direction_score)
+            self.metrics.set_metric(
+                "DIRECTION",
+                str(decision.direction_score),
+                _tone(decision.direction_score),
             )
-            self.confidence.set_value(str(decision.confidence))
-            self.entry.set_value(str(decision.entry_quality))
-            self.risk.set_value(
+            self.metrics.set_metric("CONFIDENCE", str(decision.confidence))
+            self.metrics.set_metric("ENTRY", str(decision.entry_quality))
+            self.metrics.set_metric(
+                "REVERSAL",
                 str(decision.reversal_risk),
                 "negative" if decision.reversal_risk > 70 else "neutral",
             )
-            self.regime.set_value(decision.regime)
+            self.metrics.set_metric("REGIME", decision.regime)
             self.why.set_reasons([
                 (r.reason_code, r.explanation)
                 for r in decision.reasons
@@ -230,9 +264,8 @@ class IntraderModePage(QWidget):
         )
 
     def set_candles(self, candles) -> None:
-        rows = _chart_rows(candles)
-        if rows:
-            self.chart.set_candles(rows)
+        if candles:
+            self.chart.set_candle_objects(candles)
         else:
             self.chart.set_empty_message("No stored NIFTY candles for this session.")
 
@@ -345,7 +378,7 @@ class TimeTravelPage(QWidget):
 
         self.replay_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.chart = MarketChart("30-MINUTE MARKET REPLAY")
-        self.chart.setMinimumHeight(320)
+        self.chart.setMinimumHeight(250)
         self.replay_splitter.addWidget(self.chart)
 
         side = QWidget()
@@ -428,67 +461,25 @@ class TimeTravelPage(QWidget):
         preset_row.addWidget(self.range_state)
         range_root.addLayout(preset_row)
 
-        self.range_change = MetricCard("NIFTY CHANGE", "N/A")
-        self.range_sessions = MetricCard("SESSIONS", "0")
-        self.range_high_low = MetricCard("HIGH / LOW", "N/A")
-        self.range_pnl = MetricCard("SHADOW P&L", "0")
-        self.range_expectancy = MetricCard("EXPECTANCY", "N/A")
-        self.range_news = MetricCard("RELEVANT NEWS", "0")
-        self.range_metrics = ResponsiveMetricGrid(
-            [
-                self.range_change,
-                self.range_sessions,
-                self.range_high_low,
-                self.range_pnl,
-                self.range_expectancy,
-                self.range_news,
-            ],
-            compact_height=74,
-        )
+        self.range_metrics = MetricRibbon([
+            ("NIFTY", "N/A"),
+            ("SESSIONS", "0"),
+            ("HIGH / LOW", "N/A"),
+            ("SHADOW P&L", "0"),
+            ("EXPECTANCY", "N/A"),
+            ("NEWS", "0"),
+        ])
         range_root.addWidget(self.range_metrics)
 
         self.range_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.range_chart = MarketChart("PRICE CHART — SELECTED RANGE")
-        self.range_chart.setMinimumHeight(320)
+        self.range_chart.setMinimumHeight(255)
         self.range_splitter.addWidget(self.range_chart)
 
-        scenario_widget = QWidget()
-        scenario = QVBoxLayout(scenario_widget)
-        scenario.setContentsMargins(0, 0, 0, 0)
-        scenario.setSpacing(8)
-
-        context_card = Card("ANALYSIS CONTEXT")
-        self.opening_meta = QLabel(
-            "Opening possibilities are evidence weights, not calibrated probabilities."
-        )
-        self.opening_meta.setWordWrap(True)
-        self.opening_meta.setObjectName("Muted")
-        context_card.add_widget(self.opening_meta)
-        scenario.addWidget(context_card)
-
-        scenario_grid = QWidget()
-        grid = QGridLayout(scenario_grid)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(8)
-        self.open_bull = MetricCard("BULLISH OPEN WEIGHT", "N/A")
-        self.open_flat = MetricCard("BALANCED OPEN WEIGHT", "N/A")
-        self.open_bear = MetricCard("BEARISH OPEN WEIGHT", "N/A")
-        self.open_gap = MetricCard("GAP RISK", "N/A")
-        for index, card in enumerate(
-            (self.open_bull, self.open_flat, self.open_bear, self.open_gap)
-        ):
-            card.setMaximumHeight(104)
-            grid.addWidget(card, index // 2, index % 2)
-        scenario.addWidget(scenario_grid)
-
-        self.opening_drivers = TextPanel(
-            "NEXT-SESSION OPENING POSSIBILITIES",
-            "No opening evidence available for this selection.",
-        )
-        scenario.addWidget(self.opening_drivers, 1)
-        self.range_splitter.addWidget(scenario_widget)
-        self.range_splitter.setStretchFactor(0, 7)
-        self.range_splitter.setStretchFactor(1, 3)
+        self.opening_panel = OpeningScenarioPanel()
+        self.range_splitter.addWidget(self.opening_panel)
+        self.range_splitter.setStretchFactor(0, 6)
+        self.range_splitter.setStretchFactor(1, 4)
         range_root.addWidget(self.range_splitter, 3)
 
         self.detail_tabs = QTabWidget()
@@ -509,7 +500,7 @@ class TimeTravelPage(QWidget):
         self.detail_tabs.addTab(self.range_regimes, "Regime Mix")
         self.range_coverage = DataTable(["Data family", "Coverage"])
         self.detail_tabs.addTab(self.range_coverage, "Data Coverage")
-        self.detail_tabs.setMinimumHeight(190)
+        self.detail_tabs.setMinimumHeight(155)
         range_root.addWidget(self.detail_tabs, 2)
 
         self.tabs.addTab(range_tab, "Range Analysis / Opening Possibilities")
@@ -613,9 +604,8 @@ class TimeTravelPage(QWidget):
             c for c in candles
             if start <= c.at.astimezone(INDIA_TIME) <= end
         )
-        rows = _chart_rows(window)
-        if rows:
-            self.chart.set_candles(rows)
+        if window:
+            self.chart.set_candle_objects(window)
         else:
             self.chart.set_empty_message(
                 "No local candles in this replay window. Use Fetch Missing if needed."
@@ -647,56 +637,46 @@ class TimeTravelPage(QWidget):
             f"{analysis.end.astimezone(INDIA_TIME):%d %b %H:%M} • "
             f"{analysis.candle_count:,} candles"
         )
-        self.range_change.set_value(
+        self.range_metrics.set_metric(
+            "NIFTY",
             "N/A" if analysis.change_pct is None else f"{analysis.change_pct:.3f}%",
             _tone(analysis.change_pct),
         )
-        self.range_sessions.set_value(
+        self.range_metrics.set_metric(
+            "SESSIONS",
             str(analysis.session_count),
-            subtitle="unique local trading dates",
+            tooltip="Unique local trading dates",
         )
-        self.range_high_low.set_value(
+        self.range_metrics.set_metric(
+            "HIGH / LOW",
             "N/A"
             if analysis.high is None or analysis.low is None
-            else f"{analysis.high} / {analysis.low}"
+            else f"{analysis.high} / {analysis.low}",
         )
-        self.range_pnl.set_value(
-            str(analysis.adjusted_pnl), _tone(analysis.adjusted_pnl)
+        self.range_metrics.set_metric(
+            "SHADOW P&L",
+            str(analysis.adjusted_pnl),
+            _tone(analysis.adjusted_pnl),
         )
-        self.range_expectancy.set_value(
-            _text(analysis.expectancy), _tone(analysis.expectancy)
+        self.range_metrics.set_metric(
+            "EXPECTANCY",
+            _text(analysis.expectancy),
+            _tone(analysis.expectancy),
         )
-        self.range_news.set_value(
+        self.range_metrics.set_metric(
+            "NEWS",
             str(analysis.news_count),
-            subtitle="filtered market context",
+            tooltip="Filtered market-relevant context",
         )
 
-        rows = _chart_rows(candles, max_points=1400)
-        if rows:
-            self.range_chart.set_candles(rows)
+        if candles:
+            self.range_chart.set_candle_objects(candles)
         else:
             self.range_chart.set_empty_message(
                 "No local NIFTY candles in this range. Use Fetch Missing if needed."
             )
 
-        self.open_bull.set_value(f"{opening.bullish_weight:.1f}%", "positive")
-        self.open_flat.set_value(f"{opening.balanced_weight:.1f}%")
-        self.open_bear.set_value(f"{opening.bearish_weight:.1f}%", "negative")
-        self.open_gap.set_value(
-            f"{opening.gap_risk:.1f}%",
-            "negative" if opening.gap_risk >= 60 else "neutral",
-        )
-        self.opening_meta.setText(
-            f"Next session candidate: {opening.next_session_candidate} • "
-            f"Bias score {opening.bias_score:.1f} • "
-            f"Evidence coverage {opening.evidence_coverage:.0f}%\n"
-            "Scenario weights only — not calibrated probabilities or a trade recommendation."
-        )
-        evidence = list(opening.drivers)
-        evidence.extend(f"LIMITATION: {item}" for item in opening.limitations)
-        self.opening_drivers.set_text(
-            evidence or ["No opening evidence available for this selection."]
-        )
+        self.opening_panel.set_snapshot(opening)
 
         self.range_notes.set_text(
             list(analysis.analysis_notes)

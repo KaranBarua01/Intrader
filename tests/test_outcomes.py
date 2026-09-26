@@ -60,6 +60,7 @@ def test_target_exit_records_profit_mfe_mae_and_underlying_move() -> None:
         _option(1, "95", 2),
         _option(3, "110", 3),
         _option(5, "131", 4),
+        _option(30, "140", 5),
     )
     spot_rows = (
         _spot(0, "23150", 1),
@@ -68,7 +69,7 @@ def test_target_exit_records_profit_mfe_mae_and_underlying_move() -> None:
 
     result = evaluate_shadow_trade(
         _trade(), option_rows, spot_rows, Decimal("23150"),
-        NOW + timedelta(minutes=5),
+        NOW + timedelta(minutes=31),
     )
 
     assert result.exit_reason == "TARGET"
@@ -82,12 +83,16 @@ def test_target_exit_records_profit_mfe_mae_and_underlying_move() -> None:
 
 
 def test_put_directional_spot_change_is_inverted() -> None:
-    option_rows = (_option(0, "100", 1), _option(5, "131", 2))
+    option_rows = (
+        _option(0, "100", 1),
+        _option(5, "131", 2),
+        _option(30, "135", 3),
+    )
     spot_rows = (_spot(0, "23150", 1), _spot(5, "23110", 2))
 
     result = evaluate_shadow_trade(
         _trade("BUY_PUT"), option_rows, spot_rows, Decimal("23150"),
-        NOW + timedelta(minutes=5),
+        NOW + timedelta(minutes=31),
     )
 
     assert result.directional_spot_change == Decimal("40")
@@ -98,11 +103,12 @@ def test_stop_exit_is_first_observed_boundary() -> None:
         _option(0, "100", 1),
         _option(2, "79", 2),
         _option(3, "140", 3),
+        _option(30, "120", 4),
     )
 
     result = evaluate_shadow_trade(
         _trade(), rows, (), Decimal("23150"),
-        NOW + timedelta(minutes=3),
+        NOW + timedelta(minutes=31),
     )
 
     assert result.exit_reason == "STOP"
@@ -113,7 +119,7 @@ def test_stop_exit_is_first_observed_boundary() -> None:
 def test_open_trade_remains_pending_before_timeout() -> None:
     rows = (_option(0, "100", 1), _option(10, "105", 2))
 
-    with pytest.raises(OutcomePending, match="still open"):
+    with pytest.raises(OutcomePending, match="horizon incomplete"):
         evaluate_shadow_trade(
             _trade(), rows, (), Decimal("23150"),
             NOW + timedelta(minutes=10),

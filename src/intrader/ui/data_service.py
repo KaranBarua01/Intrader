@@ -280,10 +280,18 @@ class DesktopDataService:
             events = store.load_scheduled_events(start=start, end=end)
             coverage_counts = {
                 "Candles": len(candles),
-                "Options": len(store.load_option_snapshots(start=start, end=end)),
-                "Futures": len(store.load_future_snapshots(start=start, end=end)),
-                "VIX / Index": len(store.load_index_snapshots(start=start, end=end)),
-                "Breadth": len(store.load_breadth_snapshots(start=start, end=end)),
+                "Options": store.count_time_range_rows(
+                    "option_snapshots", start=start, end=end
+                ),
+                "Futures": store.count_time_range_rows(
+                    "future_snapshots", start=start, end=end
+                ),
+                "VIX / Index": store.count_time_range_rows(
+                    "index_snapshots", start=start, end=end
+                ),
+                "Breadth": store.count_time_range_rows(
+                    "breadth_snapshots", start=start, end=end
+                ),
                 "Order flow": sum(
                     1 for d in decisions if d.depth_imbalance is not None
                 ),

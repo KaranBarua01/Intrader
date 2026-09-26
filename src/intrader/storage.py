@@ -1026,6 +1026,53 @@ class SQLiteStore:
             reasons=reasons,
         )
 
+    def load_decision_records(self):
+        """Load all immutable decisions in chronological order."""
+
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT decision_id
+                FROM decision_records
+                ORDER BY decided_at_utc ASC, decision_id ASC
+                """
+            ).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite decision list read failed") from None
+
+        return tuple(
+            record
+            for row in rows
+            if (record := self.load_decision_record(str(row[0]))) is not None
+        )
+
+    def load_completed_shadow_bundles(self):
+        """Load completed decision/trade/outcome triples chronologically."""
+
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT st.trade_id
+                FROM shadow_trades st
+                JOIN shadow_outcomes so ON so.trade_id = st.trade_id
+                ORDER BY st.opened_at_utc ASC, st.trade_id ASC
+                """
+            ).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite completed shadow read failed") from None
+
+        bundles = []
+        for row in rows:
+            trade = self.load_shadow_trade(str(row[0]))
+            if trade is None:
+                continue
+            decision = self.load_decision_record(trade.decision_id)
+            outcome = self.load_shadow_outcome(trade.trade_id)
+            if decision is None or outcome is None:
+                continue
+            bundles.append((decision, trade, outcome))
+        return tuple(bundles)
+
     def store_shadow_trade(self, trade) -> bool:
         """Insert one immutable simulated entry plan."""
 

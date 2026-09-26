@@ -472,3 +472,37 @@ def test_read_only_store_reads_existing_database_without_initializing(tmp_path) 
 
     with SQLiteStore(path, read_only=True) as store:
         assert store.count("candles") == 0
+
+
+
+def test_count_time_range_rows_does_not_require_snapshot_token(tmp_path) -> None:
+    bundle = _bundle()
+    now = NOW + timedelta(seconds=10)
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        sink = MarketSnapshotSink(store, bundle)
+        sink(
+            MarketTick(
+                "NSE", bundle.vix.token, 1, 1, now, now,
+                Decimal("12.5"), None,
+            )
+        )
+        sink(
+            MarketTick(
+                "NFO", bundle.future.token, 3, 2, now, now,
+                Decimal("23200"), 150000, 250000,
+                total_buy_quantity=Decimal("50000"),
+                total_sell_quantity=Decimal("40000"),
+            )
+        )
+
+        assert store.count_time_range_rows(
+            "index_snapshots",
+            start=NOW,
+            end=NOW + timedelta(minutes=1),
+        ) == 1
+        assert store.count_time_range_rows(
+            "future_snapshots",
+            start=NOW,
+            end=NOW + timedelta(minutes=1),
+        ) == 1

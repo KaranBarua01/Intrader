@@ -15,3 +15,6 @@ data/intrader.db-*
 /secrets.*
 Important.txt
 *.egg-info/
+
+build/
+dist/

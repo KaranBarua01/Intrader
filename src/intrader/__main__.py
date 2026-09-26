@@ -29,6 +29,7 @@ from intrader.options_pipeline import OptionsPipelineError, build_stored_options
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
 from intrader.records_pipeline import record_stored_decision
 from intrader.secrets import REQUIRED_SECRET_NAMES
+from intrader.shadow_pipeline import run_shadow_step
 from intrader.session import (
     SessionCoordinator,
     SessionScheduleError,
@@ -606,6 +607,62 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"- {reason.reason_code}: {reason.explanation}")
         return 0
 
+    if argv and argv[0] == "shadow-step":
+        if len(argv) != 3:
+            print("Usage: python -m intrader shadow-step YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=session_date,
+                session=session,
+            )
+            with SQLiteStore(_database_path()) as db_store:
+                result = run_shadow_step(
+                    db_store,
+                    market.instruments,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("SHADOW STEP UNAVAILABLE")
+            return 1
+
+        decision = result.decision.record
+        print(f"DECISION: {decision.action}")
+        print(f"Decision ID: {decision.decision_id}")
+        print(f"Brain: {decision.brain_version}")
+        print(f"Rules: {decision.rule_version}")
+        print(f"Rejected action: {decision.rejected_action or 'N/A'}")
+        if result.trade is None:
+            print("SHADOW TRADE: NONE")
+            return 0
+
+        trade = result.trade
+        print(
+            "SHADOW TRADE OPENED"
+            if result.trade_inserted
+            else "SHADOW TRADE ALREADY EXISTS"
+        )
+        print(f"Trade ID: {trade.trade_id}")
+        print(f"Shadow rules: {trade.shadow_version}")
+        print(f"Action: {trade.action}")
+        print(f"Contract: {trade.strike} {trade.option_type}")
+        print(f"Entry: {trade.entry_price}")
+        print(f"Quantity: {trade.quantity}")
+        print(f"Stop: {trade.stop_price}")
+        print(f"Target: {trade.target_price}")
+        print(f"Timeout: {trade.max_minutes} minutes")
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -727,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM]"
         )
         return 2
 

@@ -28,6 +28,7 @@ from intrader.market_confirmation_pipeline import build_stored_market_confirmati
 from intrader.options_pipeline import OptionsPipelineError, build_stored_options_intelligence
 from intrader.outcome_pipeline import OutcomePipelinePending, settle_shadow_trade
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
+from intrader.reasoning_pipeline import audit_shadow_trade
 from intrader.records_pipeline import record_stored_decision
 from intrader.secrets import REQUIRED_SECRET_NAMES
 from intrader.shadow_pipeline import run_shadow_step
@@ -727,6 +728,28 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if argv and argv[0] == "audit-shadow":
+        if len(argv) != 2:
+            print("Usage: python -m intrader audit-shadow TRADE_ID")
+            return 2
+        try:
+            with SQLiteStore(_database_path()) as db_store:
+                result = audit_shadow_trade(db_store, argv[1])
+        except Exception:
+            print("REASONING AUDIT UNAVAILABLE")
+            return 1
+
+        print("REASONING AUDIT OK")
+        print(f"Trade ID: {argv[1]}")
+        print(f"New audit rows: {result.inserted_rows}")
+        for audit in result.audits:
+            print(
+                f"{audit.thesis} | {audit.reason_code} | "
+                f"{audit.verdict} | trade {audit.trade_result} | "
+                f"P&L {audit.adjusted_pnl}"
+            )
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -848,7 +871,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID]"
         )
         return 2
 

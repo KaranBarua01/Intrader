@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from math import ceil
 
 from PySide6.QtCore import QDate, QTime, QTimer, Qt
 from PySide6.QtWidgets import (
@@ -29,17 +30,42 @@ def _text(value) -> str:
     return "N/A" if value is None else str(value)
 
 
-def _chart_rows(candles) -> list[tuple[float, float, float, float, float]]:
-    return [
-        (
-            c.at.timestamp(),
-            float(c.open),
-            float(c.close),
-            float(c.low),
-            float(c.high),
+def _chart_rows(
+    candles,
+    *,
+    max_points: int | None = None,
+) -> list[tuple[float, float, float, float, float]]:
+    ordered = list(candles)
+    if not ordered:
+        return []
+    if max_points is None or len(ordered) <= max_points:
+        return [
+            (
+                c.at.timestamp(),
+                float(c.open),
+                float(c.close),
+                float(c.low),
+                float(c.high),
+            )
+            for c in ordered
+        ]
+
+    step = max(1, ceil(len(ordered) / max_points))
+    rows = []
+    for offset in range(0, len(ordered), step):
+        chunk = ordered[offset : offset + step]
+        first = chunk[0]
+        last = chunk[-1]
+        rows.append(
+            (
+                last.at.timestamp(),
+                float(first.open),
+                float(last.close),
+                float(min(c.low for c in chunk)),
+                float(max(c.high for c in chunk)),
+            )
         )
-        for c in candles
-    ]
+    return rows
 
 
 class IntraderModePage(QWidget):
@@ -623,10 +649,7 @@ class TimeTravelPage(QWidget):
             subtitle="filtered market context",
         )
 
-        rows = _chart_rows(candles)
-        if len(rows) > 1400:
-            step = max(1, len(rows) // 1400)
-            rows = rows[::step]
+        rows = _chart_rows(candles, max_points=1400)
         if rows:
             self.range_chart.set_candles(rows)
         else:

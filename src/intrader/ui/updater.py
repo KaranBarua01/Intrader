@@ -68,6 +68,13 @@ class UpdateService:
 
     def _check_git(self) -> UpdateStatus:
         assert self.root is not None
+        branch = _run_git(self.root, "branch", "--show-current")
+        if branch != UPDATE_BRANCH:
+            return UpdateStatus(
+                mode="git",
+                available=False,
+                summary=f"Switch to {UPDATE_BRANCH} before applying development updates.",
+            )
         _run_git(self.root, "fetch", "origin", UPDATE_BRANCH)
         dirty = _run_git(self.root, "status", "--porcelain")
         if dirty:
@@ -101,6 +108,9 @@ class UpdateService:
         if not self.development_mode:
             raise UpdateError("Packaged updates require a published Windows release asset.")
         assert self.root is not None
+        branch = _run_git(self.root, "branch", "--show-current")
+        if branch != UPDATE_BRANCH:
+            raise UpdateError(f"Switch to {UPDATE_BRANCH} before updating.")
         if _run_git(self.root, "status", "--porcelain"):
             raise UpdateError("Tracked local changes must be committed or stashed first.")
         output = _run_git(

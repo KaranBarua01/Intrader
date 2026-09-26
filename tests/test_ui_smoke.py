@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from intrader.ui.components import MarketChart
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
+from intrader.ui.strategy_lab_page import StrategyLabPage
 from intrader.ui.utility_pages import (
     DashboardPage, ExportPage, RecordsManagerPage, ShadowTraderPage,
     SystemHealthPage, ThesisPage, TradeHistoryPage,
@@ -25,6 +26,7 @@ def test_primary_and_supporting_pages_construct_offscreen() -> None:
         IntraderModePage(),
         TimeTravelPage(),
         AnalysisModePage(),
+        StrategyLabPage(),
         ThesisPage(),
         ShadowTraderPage(),
         RecordsManagerPage(),
@@ -93,3 +95,30 @@ def test_time_travel_range_results_render_without_fake_data() -> None:
     assert page.range_sessions.value_label.text() == "0"
     assert page.range_coverage.rowCount() == 1
     assert page.range_notes.rowCount() == 1
+
+
+
+def test_strategy_lab_is_separate_research_mode() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = StrategyLabPage()
+
+    assert page.analyze_button.text() == "Analyze Strategies"
+    assert page.source_filter.findText("Steve Nison") >= 0
+    assert page.source_filter.findText("Ashwani Gujral") >= 0
+    assert page.source_filter.findText("John Carter") >= 0
+    assert page.source_filter.findText("Mark Douglas") >= 0
+
+    snapshot = SimpleNamespace(
+        candle_count=0,
+        session_count=0,
+        strategies=(),
+        notes=(
+            "LAB ONLY: no Strategy Lab result is consumed by Intrader Mode.",
+        ),
+    )
+    page.set_snapshot(snapshot)
+
+    assert page.total_signals.value_label.text() == "0"
+    assert page.active_strategies.value_label.text() == "0"
+    assert page.best_hit.value_label.text() == "N/A"
+    assert page.notes.rowCount() == 1

@@ -92,6 +92,23 @@ def _ps_quote(path: Path) -> str:
     return str(path).replace("'", "''")
 
 
+def _safe_extract_zip(archive: Path, staging: Path) -> None:
+    """Extract only paths that stay inside the staging directory."""
+
+    staging_root = staging.resolve()
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            for member in bundle.infolist():
+                destination = (staging / member.filename).resolve()
+                if destination != staging_root and staging_root not in destination.parents:
+                    raise UpdateError("Update package contains an unsafe path.")
+            bundle.extractall(staging)
+    except UpdateError:
+        raise
+    except (OSError, zipfile.BadZipFile):
+        raise UpdateError("Downloaded update package is invalid.") from None
+
+
 class UpdateService:
     """Check/apply updates without touching ignored data or secrets."""
 
@@ -238,11 +255,7 @@ class UpdateService:
         actual = hashlib.sha256(archive.read_bytes()).hexdigest().lower()
         if not expected or actual != expected:
             raise UpdateError("Downloaded update failed SHA-256 verification.")
-        try:
-            with zipfile.ZipFile(archive) as bundle:
-                bundle.extractall(staging)
-        except (OSError, zipfile.BadZipFile):
-            raise UpdateError("Downloaded update package is invalid.") from None
+        _safe_extract_zip(archive, staging)
 
         app_dir = Path(sys.executable).resolve().parent
         executable = app_dir / Path(sys.executable).name

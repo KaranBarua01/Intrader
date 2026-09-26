@@ -12,6 +12,10 @@ from intrader.options_intelligence import OptionChainSnapshot
 from intrader.price_structure import PriceStructureSnapshot
 
 
+BRAIN_VERSION = "brain-v0.1"
+RULE_VERSION = "rules-v0.1"
+
+
 class MarketBrainError(Exception):
     """Market Brain inputs are internally invalid."""
 

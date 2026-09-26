@@ -457,6 +457,9 @@ class MarketChart(Card):
                 self.timeframe_group.addButton(button)
                 self.timeframe_buttons[label] = button
                 header.addWidget(button)
+        self.interval_hint = QLabel("Auto → 1m")
+        self.interval_hint.setObjectName("Muted")
+        header.addWidget(self.interval_hint)
         self.layout_box.insertLayout(0, header)
 
         self.plot = pg.PlotWidget(
@@ -517,6 +520,10 @@ class MarketChart(Card):
             self._auto_minutes()
             if self._timeframe == "Auto"
             else TIMEFRAME_MINUTES[self._timeframe]
+        )
+        actual = "1H" if minutes == 60 else f"{minutes}m"
+        self.interval_hint.setText(
+            f"Auto → {actual}" if self._timeframe == "Auto" else actual
         )
         rows = self._aggregate(self._raw_candles, minutes)
         self.set_candles(rows)
@@ -581,6 +588,8 @@ class MarketChart(Card):
             self.plot.enableAutoRange()
 
     def set_empty_message(self, message: str) -> None:
+        self._raw_candles = ()
+        self.interval_hint.setText("No data")
         self.plot.clear()
         self.candles.set_data([])
         self.plot.hideAxis("left")

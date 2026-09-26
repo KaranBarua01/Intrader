@@ -273,37 +273,71 @@ class SystemHealthPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(10, 10, 10, 34)
+        title_row = QHBoxLayout()
         title = QLabel("System Health")
         title.setObjectName("PageTitle")
-        root.addWidget(title)
+        title_row.addWidget(title)
+        note = QLabel("AVAILABLE means data exists; EMPTY is not treated as healthy coverage.")
+        note.setObjectName("Muted")
+        title_row.addStretch(1)
+        title_row.addWidget(note)
+        root.addLayout(title_row)
+
         self.pills_layout = QHBoxLayout()
         self.pills = {}
-        for name in ("Database", "Candles", "Options", "Futures", "Breadth", "Decisions", "Outcomes", "Audits"):
+        for name in (
+            "Database", "Candles", "Options", "Futures", "VIX / Index",
+            "Breadth", "Order Flow", "News", "Events", "Decisions",
+            "Outcomes", "Audits",
+        ):
             pill = StatusPill(name, None)
             self.pills[name] = pill
             self.pills_layout.addWidget(pill)
         self.pills_layout.addStretch(1)
         root.addLayout(self.pills_layout)
-        self.table = DataTable(["Storage", "Rows", "Status"])
+
+        self.table = DataTable(["Storage / Context", "Rows", "State"])
         root.addWidget(self.table, 1)
 
     def refresh(self, desktop) -> None:
         mapping = {
-            "candles": "Candles", "option_snapshots": "Options", "future_snapshots": "Futures",
-            "breadth_snapshots": "Breadth", "decision_records": "Decisions",
-            "shadow_outcomes": "Outcomes", "reason_audits": "Audits",
+            "candles": "Candles",
+            "option_snapshots": "Options",
+            "future_snapshots": "Futures",
+            "index_snapshots": "VIX / Index",
+            "breadth_snapshots": "Breadth",
+            "order_flow_context": "Order Flow",
+            "news_items": "News",
+            "scheduled_events": "Events",
+            "decision_records": "Decisions",
+            "shadow_outcomes": "Outcomes",
+            "reason_audits": "Audits",
         }
         rows = []
         db_ok = True
         for table, count in desktop.database_counts:
-            ok = count >= 0
-            db_ok = db_ok and ok
-            rows.append([table, count if ok else "N/A", "OK" if ok else "ERROR"])
+            if count < 0:
+                state = "ERROR"
+                ok = False
+                db_ok = False
+            elif count == 0:
+                state = "EMPTY"
+                ok = None
+            else:
+                state = "AVAILABLE"
+                ok = True
+            rows.append([table, count if count >= 0 else "N/A", state])
             if table in mapping:
-                self.pills[mapping[table]].set_status(mapping[table], ok)
-        self.pills["Database"].set_status("Database", db_ok)
-        self.table.set_rows(rows)
+                label = mapping[table]
+                self.pills[label].set_status(
+                    f"{label}: {state}",
+                    ok,
+                )
+        self.pills["Database"].set_status(
+            "Database: OK" if db_ok else "Database: ERROR",
+            db_ok,
+        )
 
 
 class ExportPage(QWidget):

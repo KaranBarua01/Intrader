@@ -29,6 +29,7 @@ from intrader.options_pipeline import OptionsPipelineError, build_stored_options
 from intrader.outcome_pipeline import OutcomePipelinePending, settle_shadow_trade
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
 from intrader.reasoning_pipeline import audit_shadow_trade
+from intrader.records_manager_pipeline import build_records_manager
 from intrader.records_pipeline import record_stored_decision
 from intrader.secrets import REQUIRED_SECRET_NAMES
 from intrader.shadow_pipeline import run_shadow_step
@@ -750,6 +751,69 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if argv == ["records-manager"]:
+        try:
+            with SQLiteStore(_database_path()) as db_store:
+                snapshot = build_records_manager(db_store)
+        except Exception:
+            print("RECORDS MANAGER UNAVAILABLE")
+            return 1
+
+        overall = snapshot.overall
+        print("INTRADER RECORDS MANAGER")
+        print(f"Starting capital: {snapshot.starting_capital}")
+        print(f"Current shadow equity: {snapshot.current_equity}")
+        print(f"Completed trades: {overall.trades}")
+        print(f"Wins: {overall.wins}")
+        print(f"Losses: {overall.losses}")
+        print(
+            "Win rate: "
+            + ("N/A" if overall.win_rate is None else f"{overall.win_rate}%")
+        )
+        print(f"Gross P&L: {overall.gross_pnl}")
+        print(f"Adjusted P&L: {overall.adjusted_pnl}")
+        print(
+            "Expectancy: "
+            + ("N/A" if overall.expectancy is None else str(overall.expectancy))
+        )
+        print(
+            "Profit factor: "
+            + ("N/A" if overall.profit_factor is None else str(overall.profit_factor))
+        )
+        print(f"Max drawdown: {overall.max_drawdown}")
+        print(f"Max drawdown %: {overall.max_drawdown_pct}")
+        print(f"Max winning streak: {overall.max_winning_streak}")
+        print(f"Max losing streak: {overall.max_losing_streak}")
+        print("Decision counts:")
+        for action, count in snapshot.decision_counts:
+            print(f"- {action}: {count}")
+        print("CALL / PUT:")
+        for action, metrics in snapshot.by_action:
+            print(
+                f"- {action}: trades {metrics.trades}, "
+                f"P&L {metrics.adjusted_pnl}, "
+                f"win rate "
+                + ("N/A" if metrics.win_rate is None else f"{metrics.win_rate}%")
+            )
+        print("Regimes:")
+        for regime, metrics in snapshot.by_regime:
+            print(
+                f"- {regime}: trades {metrics.trades}, "
+                f"P&L {metrics.adjusted_pnl}, "
+                f"expectancy "
+                + ("N/A" if metrics.expectancy is None else str(metrics.expectancy))
+            )
+        print("Reason associations:")
+        for reason in snapshot.reasons[:20]:
+            print(
+                f"- {reason.reason_code}: n={reason.occurrences}, "
+                f"profit={reason.profitable}, loss={reason.losing}, "
+                f"supported={reason.supported}, "
+                f"contradicted={reason.contradicted}, "
+                f"avg P&L={reason.average_pnl}"
+            )
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -871,7 +935,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager]"
         )
         return 2
 

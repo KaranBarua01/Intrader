@@ -86,7 +86,10 @@ def test_range_analysis_summarizes_price_decisions_context() -> None:
     assert dict(result.regime_counts) == {"TRENDING_UP": 1}
     assert result.news_count == 1
     assert result.event_count == 1
+    assert result.analysis_notes
+    assert "NIFTY rose" in result.analysis_notes[0]
     assert any(moment.kind == "BRAIN_DECISION" for moment in result.key_moments)
+    assert any(moment.kind == "NEWS_CONTEXT" for moment in result.key_moments)
     assert dict(result.coverage)["Candles"] == "AVAILABLE"
 
 

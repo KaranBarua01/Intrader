@@ -5,7 +5,12 @@ import struct
 import pytest
 
 from intrader.instruments import Instrument, NiftyInstruments
-from intrader.stream_protocol import (\n    InvalidPacket,\n    breadth_subscription_message,\n    decode_tick,\n    subscription_messages,\n)
+from intrader.stream_protocol import (
+    InvalidPacket,
+    breadth_subscription_message,
+    decode_tick,
+    subscription_messages,
+)
 
 
 NOW = datetime(2026, 9, 28, 4, 0, tzinfo=timezone.utc)

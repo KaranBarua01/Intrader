@@ -5,10 +5,12 @@ on:
     branches:
       - intrader-phase1
       - intrader-phase2
+      - intrader-phase3
       - main
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   pytest:

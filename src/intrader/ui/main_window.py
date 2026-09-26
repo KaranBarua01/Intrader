@@ -6,23 +6,26 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDate, QThread, QTime, Signal, Qt
+from PySide6.QtCore import QDate, QSettings, QThread, QTime, Signal, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFileDialog, QFrame, QGraphicsDropShadowEffect,
+    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from intrader.ui.data_service import DesktopDataService
 from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.strategy_lab_page import StrategyLabPage
-from intrader.ui.theme import APP_STYLESHEET
+from intrader.ui.theme import THEMES, build_stylesheet
 from intrader.ui.updater import UpdateApplyResult, UpdateError, UpdateService, UpdateStatus
 from intrader.ui.utility_pages import (
     CalibrationPage, DashboardPage, ExportPage, RecordsManagerPage,
     ResearchBrowserPage, ShadowTraderPage, SystemHealthPage, ThesisPage,
     TradeHistoryPage,
 )
+from intrader import __version__
 from intrader.historical import INDIA_TIME
 from intrader.storage import SQLiteStore
 
@@ -45,98 +48,74 @@ class TaskThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        self.settings = QSettings("Intrader", "Desktop")
         self.setWindowTitle("Intrader")
         self.resize(1540, 940)
-        self.setMinimumSize(1180, 760)
-        self.setStyleSheet(APP_STYLESHEET)
+        self.setMinimumSize(900, 620)
+        self.current_theme = str(self.settings.value("theme", "Sand"))
+        if self.current_theme not in THEMES:
+            self.current_theme = "Sand"
+        self.setStyleSheet(build_stylesheet(self.current_theme))
         self.service = DesktopDataService()
         self.updater = UpdateService()
         self._workers: set[TaskThread] = set()
         self._nav_buttons: dict[str, QPushButton] = {}
         self._pages: dict[str, QWidget] = {}
+        self._page_widgets: dict[str, QWidget] = {}
+        self._dock_visible = False
         self._build_ui()
+        saved_geometry = self.settings.value("geometry")
+        if saved_geometry is not None:
+            self.restoreGeometry(saved_geometry)
         self.refresh_all()
 
     def _build_ui(self) -> None:
         central = QWidget()
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(205)
-        side = QVBoxLayout(sidebar)
-        side.setContentsMargins(12, 14, 12, 14)
-        logo = QLabel("INTRADER")
-        logo.setObjectName("AppTitle")
-        side.addWidget(logo)
-        subtitle = QLabel("Market Intelligence")
-        subtitle.setObjectName("Muted")
-        side.addWidget(subtitle)
-        side.addSpacing(14)
-
-        nav = [
-            ("Dashboard", "Dashboard"),
-            ("Intrader Mode", "Intrader Mode"),
-            ("Time Travel", "Time Travel"),
-            ("Analysis Mode", "Analysis Mode"),
-            ("Strategy Lab", "Strategy Lab"),
-            ("Thesis", "Thesis"),
-            ("Shadow Trader", "Shadow Trader"),
-            ("Records Manager", "Records Manager"),
-            ("Trade History", "Trade History"),
-            ("Research Browser", "Research Browser"),
-            ("Calibration", "Calibration"),
-            ("System Health", "System Health"),
-            ("Export", "Export"),
-        ]
-        for label, page_name in nav:
-            button = QPushButton(label)
-            button.setObjectName("NavButton")
-            button.setProperty("active", False)
-            button.clicked.connect(lambda _checked=False, name=page_name: self.show_page(name))
-            side.addWidget(button)
-            self._nav_buttons[page_name] = button
-        side.addStretch(1)
-        version = QLabel("Phase 4 Desktop")
-        version.setObjectName("Muted")
-        side.addWidget(version)
-        root.addWidget(sidebar)
-
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
         top = QFrame()
         top.setObjectName("TopBar")
+        top.setFixedHeight(52)
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(14, 9, 14, 9)
-        self.mode_label = QLabel("INTRADER MODE")
-        self.mode_label.setObjectName("CardTitle")
-        top_layout.addWidget(self.mode_label)
-        top_layout.addSpacing(14)
-        self.mode_buttons = {}
-        for text, page in (
-            ("Intrader", "Intrader Mode"),
-            ("Time Travel", "Time Travel"),
-            ("Analysis", "Analysis Mode"),
-            ("Strategy Lab", "Strategy Lab"),
-        ):
-            button = QPushButton(text)
-            button.clicked.connect(lambda _checked=False, name=page: self.show_page(name))
-            self.mode_buttons[page] = button
-            top_layout.addWidget(button)
+        top_layout.setContentsMargins(14, 7, 14, 7)
+        top_layout.setSpacing(8)
+
+        logo = QLabel("INTRADER")
+        logo.setObjectName("AppTitle")
+        top_layout.addWidget(logo)
+        subtitle = QLabel("Market Intelligence")
+        subtitle.setObjectName("Muted")
+        top_layout.addWidget(subtitle)
         top_layout.addStretch(1)
+
+        self.layout_combo = QComboBox()
+        self.layout_combo.addItems(["Balanced", "Compact", "Analysis", "Monitoring"])
+        self.layout_combo.setToolTip("Workspace density / arrangement")
+        self.layout_combo.setCurrentText(
+            str(self.settings.value("layout_preset", "Balanced"))
+        )
+        self.layout_combo.currentTextChanged.connect(self.apply_layout_preset)
+        top_layout.addWidget(self.layout_combo)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEMES))
+        self.theme_combo.setCurrentText(self.current_theme)
+        self.theme_combo.setToolTip("Minimalist appearance")
+        self.theme_combo.currentTextChanged.connect(self.apply_theme)
+        top_layout.addWidget(self.theme_combo)
+
         self.refresh_button = QPushButton("Refresh Data")
         self.refresh_button.setObjectName("PrimaryButton")
         self.refresh_button.clicked.connect(self.refresh_all)
         top_layout.addWidget(self.refresh_button)
+
         self.update_button = QPushButton("Update")
         self.update_button.setObjectName("PrimaryButton")
         self.update_button.clicked.connect(self.check_updates)
         top_layout.addWidget(self.update_button)
-        content_layout.addWidget(top)
+        root.addWidget(top)
 
         self.stack = QStackedWidget()
         self.dashboard_page = DashboardPage()
@@ -152,6 +131,7 @@ class MainWindow(QMainWindow):
         self.calibration_page = CalibrationPage()
         self.health_page = SystemHealthPage()
         self.export_page = ExportPage()
+
         pages = [
             ("Dashboard", self.dashboard_page),
             ("Intrader Mode", self.intrader_page),
@@ -168,22 +148,149 @@ class MainWindow(QMainWindow):
             ("Export", self.export_page),
         ]
         for name, page in pages:
-            self._pages[name] = page
-            self.stack.addWidget(page)
-        content_layout.addWidget(self.stack, 1)
-        root.addWidget(content, 1)
+            wrapper = QScrollArea()
+            wrapper.setWidgetResizable(True)
+            wrapper.setFrameShape(QFrame.Shape.NoFrame)
+            wrapper.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            wrapper.setWidget(page)
+            self._pages[name] = wrapper
+            self._page_widgets[name] = page
+            self.stack.addWidget(wrapper)
+        root.addWidget(self.stack, 1)
         self.setCentralWidget(central)
+
+        # Floating bottom dock: hidden by default so work gets the canvas.
+        self.bottom_dock = QFrame(central)
+        self.bottom_dock.setObjectName("BottomDock")
+        dock_shadow = QGraphicsDropShadowEffect(self.bottom_dock)
+        dock_shadow.setBlurRadius(26)
+        dock_shadow.setOffset(0, 5)
+        dock_shadow.setColor(QColor(30, 55, 70, 45))
+        self.bottom_dock.setGraphicsEffect(dock_shadow)
+        dock_layout = QHBoxLayout(self.bottom_dock)
+        dock_layout.setContentsMargins(10, 8, 10, 8)
+        dock_layout.setSpacing(4)
+
+        primary = [
+            ("Dashboard", "Dashboard"),
+            ("Intrader", "Intrader Mode"),
+            ("Time Travel", "Time Travel"),
+            ("Analysis", "Analysis Mode"),
+            ("Strategy Lab", "Strategy Lab"),
+            ("System Health", "System Health"),
+        ]
+        for label, page_name in primary:
+            button = QPushButton(label)
+            button.setObjectName("DockNavButton")
+            button.setProperty("active", False)
+            button.clicked.connect(
+                lambda _checked=False, name=page_name: self.show_page(name)
+            )
+            dock_layout.addWidget(button)
+            self._nav_buttons[page_name] = button
+
+        self.more_button = QPushButton("More")
+        self.more_button.setObjectName("DockNavButton")
+        self.more_menu = QMenu(self.more_button)
+        for label, page_name in (
+            ("Thesis", "Thesis"),
+            ("Shadow Trader", "Shadow Trader"),
+            ("Records Manager", "Records Manager"),
+            ("Trade History", "Trade History"),
+            ("Research Browser", "Research Browser"),
+            ("Calibration", "Calibration"),
+            ("Export", "Export"),
+        ):
+            action = self.more_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, name=page_name: self.show_page(name)
+            )
+        self.more_button.setMenu(self.more_menu)
+        dock_layout.addWidget(self.more_button)
+        dock_layout.addSpacing(8)
+
+        version = QLabel(f"Intrader v{__version__} • Phase 4 Desktop")
+        version.setObjectName("Muted")
+        dock_layout.addWidget(version)
+        self.bottom_dock.hide()
+
+        self.dock_handle = QPushButton("⌃", central)
+        self.dock_handle.setObjectName("DockHandle")
+        self.dock_handle.setToolTip("Open navigation dock")
+        self.dock_handle.clicked.connect(self.toggle_bottom_dock)
 
         self.time_page.load_button.clicked.connect(self.load_time_travel)
         self.time_page.range_load_button.clicked.connect(self.load_time_range)
         self.time_page.reanalyze_button.clicked.connect(self.reanalyze_time_travel)
+        if hasattr(self.time_page, "replay_enrich_button"):
+            self.time_page.replay_enrich_button.clicked.connect(
+                lambda: self.enrich_time_travel(False)
+            )
+        if hasattr(self.time_page, "range_enrich_button"):
+            self.time_page.range_enrich_button.clicked.connect(
+                lambda: self.enrich_time_travel(True)
+            )
         self.strategy_page.analyze_requested.connect(self.load_strategy_lab)
         self.strategy_page.replay_requested.connect(self.open_strategy_replay)
+        if hasattr(self.strategy_page, "enrich_requested"):
+            self.strategy_page.enrich_requested.connect(self.enrich_strategy_lab)
         self.calibration_page.refresh_requested.connect(self.refresh_calibration)
         self.export_page.shadow_export_requested.connect(self.export_shadow)
         self.export_page.reasoning_export_requested.connect(self.export_reasoning_log)
         self.export_page.audit_export_requested.connect(self.export_audits)
+
         self.show_page("Intrader Mode")
+        self.apply_layout_preset(self.layout_combo.currentText())
+        self._position_bottom_navigation()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_bottom_navigation()
+
+    def _position_bottom_navigation(self) -> None:
+        central = self.centralWidget()
+        if central is None or not hasattr(self, "dock_handle"):
+            return
+        width = central.width()
+        height = central.height()
+        dock_width = min(max(680, int(width * 0.72)), max(680, width - 24))
+        if width < 760:
+            dock_width = max(520, width - 16)
+        dock_height = 64
+        dock_x = max(8, (width - dock_width) // 2)
+        dock_y = max(52, height - dock_height - 14)
+        self.bottom_dock.setGeometry(dock_x, dock_y, dock_width, dock_height)
+        handle_y = dock_y - 12 if self._dock_visible else max(52, height - 29)
+        self.dock_handle.setGeometry(max(8, (width - 46) // 2), handle_y, 46, 22)
+        self.bottom_dock.raise_()
+        self.dock_handle.raise_()
+
+    def toggle_bottom_dock(self) -> None:
+        self._dock_visible = not self._dock_visible
+        self.bottom_dock.setVisible(self._dock_visible)
+        self.dock_handle.setText("⌄" if self._dock_visible else "⌃")
+        self.dock_handle.setToolTip(
+            "Hide navigation dock" if self._dock_visible else "Open navigation dock"
+        )
+        self._position_bottom_navigation()
+
+    def apply_theme(self, name: str) -> None:
+        if name not in THEMES:
+            return
+        self.current_theme = name
+        self.setStyleSheet(build_stylesheet(name))
+        self.settings.setValue("theme", name)
+
+    def apply_layout_preset(self, preset: str) -> None:
+        self.settings.setValue("layout_preset", preset)
+        current = self.stack.currentWidget()
+        page = None
+        for name, wrapper in self._pages.items():
+            if wrapper is current:
+                page = self._page_widgets.get(name)
+                break
+        if page is not None and hasattr(page, "apply_layout_preset"):
+            page.apply_layout_preset(preset)
 
     def _run_task(self, task: Callable[[], object], success: Callable[[object], None], failure: Callable[[str], None] | None = None) -> None:
         worker = TaskThread(task)
@@ -194,16 +301,19 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def show_page(self, name: str) -> None:
-        page = self._pages[name]
-        self.stack.setCurrentWidget(page)
+        wrapper = self._pages[name]
+        self.stack.setCurrentWidget(wrapper)
         for page_name, button in self._nav_buttons.items():
             button.setProperty("active", page_name == name)
             button.style().unpolish(button)
             button.style().polish(button)
-        if name in ("Intrader Mode", "Time Travel", "Analysis Mode"):
-            self.mode_label.setText(name.upper())
-        else:
-            self.mode_label.setText(name.upper())
+        primary_names = set(self._nav_buttons)
+        self.more_button.setText("More" if name in primary_names else f"More • {name}")
+        page = self._page_widgets[name]
+        if hasattr(page, "apply_layout_preset"):
+            page.apply_layout_preset(self.layout_combo.currentText())
+        if self._dock_visible:
+            self.toggle_bottom_dock()
 
     def refresh_all(self) -> None:
         self.refresh_button.setEnabled(False)
@@ -255,15 +365,11 @@ class MainWindow(QMainWindow):
         end = self.time_page.selected_end_datetime()
         start = end - timedelta(minutes=30)
         def task():
-            try:
-                self.service.refresh_global_news(start=start, end=end)
-            except Exception:
-                pass
             return (
                 self.service.decisions_for_day(day),
                 self.service.completed_for_day(day),
                 self.service.load_nifty_candle_range(
-                    start, end, backfill_missing=True
+                    start, end, backfill_missing=False
                 ),
                 self.service.news_for_window(start, end),
             )
@@ -314,6 +420,41 @@ class MainWindow(QMainWindow):
             self._show_error(message)
 
         self._run_task(task, done, failed)
+
+    def enrich_time_travel(self, range_mode: bool) -> None:
+        if range_mode:
+            start, end = self.time_page.selected_range()
+            button = self.time_page.range_enrich_button
+        else:
+            end = self.time_page.selected_end_datetime()
+            start = end - timedelta(minutes=30)
+            button = self.time_page.replay_enrich_button
+        button.setEnabled(False)
+        button.setText("Fetching…")
+
+        def done(payload) -> None:
+            button.setEnabled(True)
+            button.setText("Fetch Missing")
+            candles, news = payload
+            self.statusBar().showMessage(
+                f"Historical enrichment complete: +{candles} candles, +{news} relevant news items.",
+                6000,
+            )
+            if range_mode:
+                self.load_time_range()
+            else:
+                self.load_time_travel()
+
+        def failed(message: str) -> None:
+            button.setEnabled(True)
+            button.setText("Fetch Missing")
+            self._show_error(message)
+
+        self._run_task(
+            lambda: self.service.enrich_time_range(start, end),
+            done,
+            failed,
+        )
 
     def reanalyze_time_travel(self) -> None:
         at = self.time_page.selected_replay_datetime()
@@ -388,6 +529,33 @@ class MainWindow(QMainWindow):
             self._show_error(message)
 
         self._run_task(task, done, failed)
+
+    def enrich_strategy_lab(self) -> None:
+        start, end = self.strategy_page.selected_range()
+        button = self.strategy_page.fetch_button
+        button.setEnabled(False)
+        button.setText("Fetching…")
+
+        def done(payload) -> None:
+            button.setEnabled(True)
+            button.setText("Fetch Missing")
+            candles, news = payload
+            self.statusBar().showMessage(
+                f"Strategy Lab enrichment complete: +{candles} candles, +{news} relevant news items.",
+                6000,
+            )
+            self.load_strategy_lab()
+
+        def failed(message: str) -> None:
+            button.setEnabled(True)
+            button.setText("Fetch Missing")
+            self._show_error(message)
+
+        self._run_task(
+            lambda: self.service.enrich_time_range(start, end),
+            done,
+            failed,
+        )
 
     def open_strategy_replay(self, at) -> None:
         replay_end = at.astimezone(INDIA_TIME) + timedelta(minutes=15)
@@ -486,6 +654,12 @@ class MainWindow(QMainWindow):
         def done(path: object) -> None:
             QMessageBox.information(self, "Export Complete", f"Saved to:\n{path}")
         self._run_task(task, done)
+
+    def closeEvent(self, event) -> None:
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("theme", self.current_theme)
+        self.settings.setValue("layout_preset", self.layout_combo.currentText())
+        super().closeEvent(event)
 
     def _show_error(self, message: str) -> None:
         QMessageBox.warning(self, "Intrader", message or "Operation unavailable.")

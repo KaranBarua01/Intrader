@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from intrader.historical import INDIA_TIME
 from intrader.ui.components import (
-    Card, DataTable, MetricCard, ResponsiveMetricGrid, TextPanel,
+    Card, DataTable, MetricRibbon, TextPanel,
 )
 
 
@@ -108,21 +108,13 @@ class StrategyLabPage(QWidget):
         filter_controls.addStretch(1)
         root.addLayout(filter_controls)
 
-        self.total_signals = MetricCard("TOTAL SIGNALS", "0")
-        self.active_strategies = MetricCard("ACTIVE STRATEGIES", "0")
-        self.best_hit = MetricCard("HIGHEST 30M HIT", "N/A")
-        self.sessions = MetricCard("SESSIONS", "0")
-        self.candles = MetricCard("CANDLES TESTED", "0")
-        self.metrics = ResponsiveMetricGrid(
-            [
-                self.total_signals,
-                self.active_strategies,
-                self.best_hit,
-                self.sessions,
-                self.candles,
-            ],
-            compact_height=74,
-        )
+        self.metrics = MetricRibbon([
+            ("SIGNALS", "0"),
+            ("ACTIVE", "0"),
+            ("BEST 30M", "N/A"),
+            ("SESSIONS", "0"),
+            ("CANDLES", "0"),
+        ])
         root.addWidget(self.metrics)
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -131,22 +123,9 @@ class StrategyLabPage(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         self.strategy_table = DataTable(
-            [
-                "Source",
-                "Strategy",
-                "n",
-                "Bull",
-                "Bear",
-                "5m",
-                "15m",
-                "30m",
-                "Avg30",
-                "MFE",
-                "MAE",
-                "Sample",
-            ]
+            ["Strategy", "n", "5m", "15m", "30m", "Quality"]
         )
-        strategy_card = Card("STRATEGY PERFORMANCE")
+        strategy_card = Card("Strategy performance")
         strategy_card.add_widget(self.strategy_table)
         left_layout.addWidget(strategy_card, 1)
         self.main_splitter.addWidget(left)
@@ -167,15 +146,15 @@ class StrategyLabPage(QWidget):
         self.detail_tabs.addTab(self.notes, "Interpretation")
         right_layout.addWidget(self.detail_tabs)
         self.main_splitter.addWidget(right)
-        self.main_splitter.setStretchFactor(0, 7)
-        self.main_splitter.setStretchFactor(1, 3)
+        self.main_splitter.setStretchFactor(0, 65)
+        self.main_splitter.setStretchFactor(1, 35)
         root.addWidget(self.main_splitter, 2)
 
         self.occurrence_table = DataTable(
             ["Time", "Dir", "Entry", "Regime", "5m", "15m", "30m", "MFE", "MAE"]
         )
         occurrence_card = Card(
-            "OCCURRENCES — DOUBLE-CLICK TO OPEN IN TIME TRAVEL"
+            "Occurrences • double-click a row to open Time Travel"
         )
         occurrence_card.add_widget(self.occurrence_table)
         root.addWidget(occurrence_card, 2)
@@ -238,25 +217,30 @@ class StrategyLabPage(QWidget):
 
     def set_snapshot(self, snapshot) -> None:
         self._snapshot = snapshot
-        self.total_signals.set_value(
-            str(sum(strategy.signals for strategy in snapshot.strategies))
+        self.metrics.set_metric(
+            "SIGNALS",
+            str(sum(strategy.signals for strategy in snapshot.strategies)),
         )
-        self.active_strategies.set_value(
-            str(sum(1 for strategy in snapshot.strategies if strategy.signals))
+        self.metrics.set_metric(
+            "ACTIVE",
+            str(sum(1 for strategy in snapshot.strategies if strategy.signals)),
         )
         available_hits = [
             strategy.hit_rate_30m
             for strategy in snapshot.strategies
             if strategy.hit_rate_30m is not None
         ]
-        self.best_hit.set_value(
+        self.metrics.set_metric(
+            "BEST 30M",
             "N/A" if not available_hits else f"{max(available_hits):.2f}%",
-            subtitle="observed; sample size matters",
+            tooltip="Observed hit rate; sample size matters",
         )
-        self.sessions.set_value(
-            str(snapshot.session_count), subtitle="unique trading dates"
+        self.metrics.set_metric(
+            "SESSIONS",
+            str(snapshot.session_count),
+            tooltip="Unique trading dates",
         )
-        self.candles.set_value(str(snapshot.candle_count))
+        self.metrics.set_metric("CANDLES", str(snapshot.candle_count))
         self.notes.set_text(list(snapshot.notes))
         self._render_strategy_table()
 
@@ -268,7 +252,7 @@ class StrategyLabPage(QWidget):
         if self._snapshot is None:
             self._visible_strategies = ()
             self.strategy_table.set_rows([
-                ["—", "Run analysis to populate Strategy Lab.", 0, 0, 0, "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "NO DATA"]
+                ["Run analysis to populate Strategy Lab.", 0, "N/A", "N/A", "N/A", "NO DATA"]
             ])
             self.occurrence_table.set_rows([])
             return
@@ -280,17 +264,11 @@ class StrategyLabPage(QWidget):
         )
         self.strategy_table.set_rows([
             [
-                strategy.definition.source,
                 strategy.definition.name,
                 strategy.signals,
-                strategy.bullish_signals,
-                strategy.bearish_signals,
                 _fmt_pct(strategy.hit_rate_5m),
                 _fmt_pct(strategy.hit_rate_15m),
                 _fmt_pct(strategy.hit_rate_30m),
-                _fmt(strategy.avg_return_30m),
-                _fmt(strategy.avg_mfe_30m),
-                _fmt(strategy.avg_mae_30m),
                 strategy.sample_label,
             ]
             for strategy in self._visible_strategies
@@ -324,10 +302,18 @@ class StrategyLabPage(QWidget):
         strategy = self._visible_strategies[row]
         definition = strategy.definition
         self.strategy_detail.set_text([
-            f"<b>{definition.name}</b> — {definition.source}",
+            f"<b>{definition.name}</b><br>{definition.source}",
             definition.description,
-            f"Direction scope: {definition.direction_scope}",
-            f"Sample status: {strategy.sample_label} • n={strategy.signals}",
+            (
+                f"<b>Sample</b>  {strategy.sample_label} • n={strategy.signals}<br>"
+                f"<b>Direction</b>  {definition.direction_scope}<br>"
+                f"<b>Bull / Bear</b>  {strategy.bullish_signals} / {strategy.bearish_signals}"
+            ),
+            (
+                f"<b>Avg 30m</b>  {_fmt(strategy.avg_return_30m)}<br>"
+                f"<b>MFE 30m</b>  {_fmt(strategy.avg_mfe_30m)}<br>"
+                f"<b>MAE 30m</b>  {_fmt(strategy.avg_mae_30m)}"
+            ),
         ])
         self._visible_occurrences = strategy.occurrences
         self.occurrence_table.set_rows([

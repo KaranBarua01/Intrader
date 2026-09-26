@@ -129,21 +129,15 @@ def test_strategy_lab_is_separate_research_mode() -> None:
 
 def test_time_travel_uses_real_timestamp_chart_coordinates() -> None:
     from datetime import datetime
-    from decimal import Decimal
-    from intrader.historical import Candle, INDIA_TIME
+    from intrader.historical import INDIA_TIME
 
     app = QApplication.instance() or QApplication([])
-    page = TimeTravelPage()
-    candle = Candle(
-        datetime(2026, 9, 25, 10, 0, tzinfo=INDIA_TIME),
-        Decimal("23000"),
-        Decimal("23010"),
-        Decimal("22990"),
-        Decimal("23005"),
-        1000,
-    )
-    page.set_session_data((), (), (candle,), ())
-    bounds = page.chart.candles.boundingRect()
+    chart = MarketChart()
+    at = datetime(2026, 9, 25, 10, 0, tzinfo=INDIA_TIME)
+    chart.set_candles([
+        (at.timestamp(), 23000.0, 23005.0, 22990.0, 23010.0)
+    ])
+    bounds = chart.candles.boundingRect()
 
     assert bounds.left() > 1_000_000_000
 

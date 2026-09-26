@@ -212,3 +212,29 @@ def test_dock_triangle_uses_candlestick_direction_colors() -> None:
 
     button.set_dock_open(True)
     assert button.dock_open() is True
+
+
+
+def test_30m_candle_aggregation_is_anchored_to_market_open() -> None:
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from intrader.historical import Candle, INDIA_TIME
+
+    start = datetime(2026, 9, 25, 9, 15, tzinfo=INDIA_TIME)
+    candles = tuple(
+        Candle(
+            start + timedelta(minutes=i),
+            Decimal("100"),
+            Decimal("102"),
+            Decimal("99"),
+            Decimal("101"),
+            1000,
+        )
+        for i in range(40)
+    )
+
+    rows = MarketChart._aggregate(candles, 30)
+
+    assert len(rows) == 2
+    assert rows[0][0] == start.timestamp()
+    assert rows[1][0] == (start + timedelta(minutes=30)).timestamp()

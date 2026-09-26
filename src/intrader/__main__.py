@@ -79,6 +79,13 @@ def _print_schedule(schedule) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv == ["desktop"]:
+        try:
+            from intrader.ui.app import main as desktop_main
+        except Exception:
+            print('DESKTOP UI UNAVAILABLE. Install with: pip install -e ".[ui]"')
+            return 1
+        return desktop_main()
     if argv and argv[:2] == ["credentials", "set"]:
         if len(argv) != 3 or argv[2] not in REQUIRED_SECRET_NAMES:
             print("Unsupported credential name")
@@ -1000,7 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate | desktop]"
         )
         return 2
 

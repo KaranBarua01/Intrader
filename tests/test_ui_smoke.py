@@ -65,7 +65,13 @@ def test_market_chart_empty_state_hides_meaningless_axes() -> None:
 def test_time_travel_range_results_render_without_fake_data() -> None:
     app = QApplication.instance() or QApplication([])
     page = TimeTravelPage()
+    from datetime import datetime
+    from intrader.historical import INDIA_TIME
+
     analysis = SimpleNamespace(
+        start=datetime(2026, 9, 25, 9, 15, tzinfo=INDIA_TIME),
+        end=datetime(2026, 9, 25, 15, 30, tzinfo=INDIA_TIME),
+        candle_count=0,
         change_pct=None,
         session_count=0,
         high=None,

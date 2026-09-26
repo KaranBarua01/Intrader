@@ -15,6 +15,7 @@ from intrader.historical import Candle, INDIA_TIME
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
 from intrader.storage import SQLiteStore
+from intrader.ui.paths import database_path as default_database_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +30,7 @@ class DesktopSnapshot:
 
 class DesktopDataService:
     def __init__(self, database_path: Path | None = None) -> None:
-        self.database_path = database_path or (Path.cwd() / "data" / "intrader.db")
+        self.database_path = database_path or default_database_path()
 
     def snapshot(self, now: datetime | None = None) -> DesktopSnapshot:
         now = now or datetime.now(INDIA_TIME)

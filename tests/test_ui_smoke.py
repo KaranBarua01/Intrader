@@ -69,6 +69,7 @@ def test_time_travel_range_results_render_without_fake_data() -> None:
         adjusted_pnl=0,
         expectancy=None,
         news_count=0,
+        analysis_notes=("No evidence available.",),
         key_moments=(),
         decision_counts=(),
         regime_counts=(),
@@ -91,3 +92,4 @@ def test_time_travel_range_results_render_without_fake_data() -> None:
     assert page.range_change.value_label.text() == "N/A"
     assert page.range_sessions.value_label.text() == "0"
     assert page.range_coverage.rowCount() == 1
+    assert page.range_notes.rowCount() == 1

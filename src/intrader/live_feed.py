@@ -13,7 +13,12 @@ import websocket
 from intrader.auth import SmartSession
 from intrader.feed_health import FeedHealth, HealthSnapshot
 from intrader.instruments import NiftyInstruments
-from intrader.stream_protocol import (\n    InvalidPacket,\n    breadth_subscription_message,\n    decode_tick,\n    subscription_messages,\n)
+from intrader.stream_protocol import (
+    InvalidPacket,
+    breadth_subscription_message,
+    decode_tick,
+    subscription_messages,
+)
 
 
 STREAM_URL = "wss://smartapisocket.angelone.in/smart-stream"

@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 
 from PySide6.QtCore import QDate, QTime, Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDateEdit, QHBoxLayout, QLabel, QPushButton, QSplitter,
-    QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QComboBox, QDateEdit, QHBoxLayout, QLabel, QPushButton,
+    QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from intrader.historical import INDIA_TIME
@@ -68,15 +68,19 @@ class StrategyLabPage(QWidget):
         date_controls.addWidget(QLabel("From"))
         self.from_day = QDateEdit(QDate.currentDate().addDays(-5))
         self.from_day.setCalendarPopup(True)
+        self.from_day.setDisplayFormat("dd MMM yyyy")
         self.from_time = QTimeEdit(QTime(9, 15))
         self.from_time.setDisplayFormat("HH:mm")
+        self.from_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         date_controls.addWidget(self.from_day)
         date_controls.addWidget(self.from_time)
         date_controls.addWidget(QLabel("To"))
         self.to_day = QDateEdit(QDate.currentDate())
         self.to_day.setCalendarPopup(True)
+        self.to_day.setDisplayFormat("dd MMM yyyy")
         self.to_time = QTimeEdit(QTime(15, 30))
         self.to_time.setDisplayFormat("HH:mm")
+        self.to_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         date_controls.addWidget(self.to_day)
         date_controls.addWidget(self.to_time)
 

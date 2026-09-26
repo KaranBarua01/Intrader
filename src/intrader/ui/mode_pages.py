@@ -320,8 +320,6 @@ class TimeTravelPage(QWidget):
             self.end_time,
             self.load_button,
             self.replay_enrich_button,
-            self.reanalyze_button,
-            self.analysis_source,
         ):
             header.addWidget(widget)
         header.addStretch(1)
@@ -341,6 +339,8 @@ class TimeTravelPage(QWidget):
         controls.addWidget(QLabel("T-30m"))
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.position)
+        controls.addWidget(self.reanalyze_button)
+        controls.addWidget(self.analysis_source)
         replay_root.addLayout(controls)
 
         self.replay_splitter = QSplitter(Qt.Orientation.Horizontal)

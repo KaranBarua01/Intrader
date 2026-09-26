@@ -27,6 +27,7 @@ from intrader.live_feed import LiveFeed
 from intrader.market_confirmation_pipeline import build_stored_market_confirmation
 from intrader.options_pipeline import OptionsPipelineError, build_stored_options_intelligence
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
+from intrader.records_pipeline import record_stored_decision
 from intrader.secrets import REQUIRED_SECRET_NAMES
 from intrader.session import (
     SessionCoordinator,
@@ -547,6 +548,64 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Reason: {', '.join(snapshot.reasons)}")
         return 0 if snapshot.state != "NO TRADE" else 1
 
+    if argv and argv[0] == "record-decision":
+        if len(argv) != 3:
+            print("Usage: python -m intrader record-decision YYYY-MM-DD HH:MM")
+            return 2
+        try:
+            session_date = date.fromisoformat(argv[1])
+            at = _parse_india_datetime(argv[1], argv[2])
+            config = load_config()
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=session_date,
+                session=session,
+            )
+            with SQLiteStore(_database_path()) as db_store:
+                result = record_stored_decision(
+                    db_store,
+                    market.instruments,
+                    session_date,
+                    at,
+                    config,
+                )
+        except Exception:
+            print("DECISION RECORD UNAVAILABLE")
+            return 1
+
+        record = result.record
+        print("DECISION RECORDED" if result.inserted else "DECISION ALREADY RECORDED")
+        print(f"Decision ID: {record.decision_id}")
+        print(f"Brain: {record.brain_version}")
+        print(f"Rules: {record.rule_version}")
+        print(f"State: {record.brain_state}")
+        print(f"Action: {record.action}")
+        print(f"Rejected action: {record.rejected_action or 'N/A'}")
+        print(f"Regime: {record.regime}")
+        print(f"Direction: {record.direction_score}")
+        print(f"Confidence: {record.confidence}")
+        print("Chosen reasoning:")
+        chosen = [reason for reason in record.reasons if reason.thesis == "CHOSEN"]
+        for reason in chosen:
+            print(f"- {reason.reason_code}: {reason.explanation}")
+        print("Rejected-thesis reasoning:")
+        rejected = [reason for reason in record.reasons if reason.thesis == "REJECTED"]
+        if rejected:
+            for reason in rejected:
+                print(f"- {reason.reason_code}: {reason.explanation}")
+        else:
+            print("- N/A")
+        gates = [reason for reason in record.reasons if reason.thesis == "GATE"]
+        if gates:
+            print("Gate/context reasoning:")
+            for reason in gates:
+                print(f"- {reason.reason_code}: {reason.explanation}")
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -668,7 +727,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM]"
         )
         return 2
 

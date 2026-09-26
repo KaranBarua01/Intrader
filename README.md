@@ -375,3 +375,108 @@ Calibration never rewrites production thresholds automatically.
 - WAIT and NO_TRADE decisions are retained;
 - no order placement, modification, cancellation or GTT execution path exists;
 - calibration and promotion never auto-deploy.
+
+
+## Phase 4 — Windows Desktop App
+
+Phase 4 lives on `intrader-phase4` and adds the executable desktop interface.
+
+### Visual direction
+
+The UI uses a minimalist light theme:
+
+- warm white / off-white surfaces
+- faint sand-cast texture impression through low-contrast panels
+- very limited pale blue accents
+- green/red reserved for market direction, P&L and health
+- dense numbers and analysis without ornamental clutter
+
+### Three operating modes
+
+**Intrader Mode**
+- current CALL / PUT / WAIT / NO TRADE decision
+- Direction / Confidence / Entry Quality / Reversal Risk
+- NIFTY candles
+- reasoning and rejected opposite thesis
+- active shadow trade
+- global news and scheduled events
+- Records Manager status
+
+**Time Travel**
+- 30-minute replay window
+- play / pause / step controls
+- synchronized stored candles
+- immutable historical decision at the selected timestamp
+- original reasoning and rejected thesis
+- target/stop/timeout result
+- MFE / MAE and 1/3/5/10/15/30-minute forward outcomes
+- global market news cached for that replay window
+
+**Analysis Mode**
+- shadow equity curve
+- adjusted P&L
+- win rate / expectancy / profit factor / drawdown
+- CALL vs PUT
+- regime and time-of-day performance
+- reason-code performance
+
+Additional pages include Thesis, Shadow Trader, Records Manager, Trade History, Market Research Browser, Calibration, System Health and Export.
+
+### Global news
+
+Phase 4 adds zero-key worldwide market-news retrieval through the GDELT DOC API and stores matching articles in the same local news cache used by live mode and Time Travel. The embedded Market Research Browser is available for manual article inspection.
+
+### Launch from source
+
+Install desktop dependencies:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ui]"
+```
+
+Run either:
+
+```powershell
+.\.venv\Scripts\python.exe -m intrader desktop
+```
+
+or:
+
+```powershell
+.\.venv\Scripts\intrader-ui.exe
+```
+
+### Build the Windows executable
+
+```powershell
+.\scripts\build_windows.ps1
+```
+
+Output:
+
+```text
+dist\Intrader\Intrader.exe
+```
+
+Packaged UI data is stored under Windows LocalAppData rather than inside the executable directory, so application updates do not replace the SQLite learning history.
+
+### Update button
+
+The top-bar **Update** button has two safe modes.
+
+Development checkout:
+- requires the current branch to be `intrader-phase4`
+- checks `origin/intrader-phase4`
+- refuses to update when tracked local changes exist
+- applies only a `git pull --ff-only`
+- asks for confirmation before applying
+
+Packaged executable:
+- checks the latest GitHub release
+- requires `Intrader-Windows-x64.zip` and its SHA-256 asset
+- downloads and verifies the package
+- stages replacement outside the running application
+- closes Intrader, replaces application files, and relaunches
+- never replaces the LocalAppData database or Windows Credential Manager secrets
+
+The GitHub release workflow builds the Windows package and checksum automatically whenever a release is published.

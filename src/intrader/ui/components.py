@@ -299,9 +299,9 @@ class StatusPill(QLabel):
     def set_status(self, label: str, ok: bool | None) -> None:
         self.setText(label)
         if ok is True:
-            background, foreground = "#e9f6ef", "#28704d"
+            background, foreground = "#e9f6ef", BULLISH_COLOR
         elif ok is False:
-            background, foreground = "#faeaea", "#a83535"
+            background, foreground = "#faeaea", BEARISH_COLOR
         else:
             background, foreground = "#efeee9", "#6f777c"
         self.setStyleSheet(

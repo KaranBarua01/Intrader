@@ -34,10 +34,15 @@ def _utc_iso(value) -> str:
 class SQLiteStore:
     """Small transactional SQLite boundary for Phase 1 market data."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(path)
+        self.read_only = read_only
+        if read_only:
+            uri = f"file:{path.resolve().as_posix()}?mode=ro"
+            self._connection = sqlite3.connect(uri, uri=True)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._connection = sqlite3.connect(path)
         self._connection.execute("PRAGMA busy_timeout=5000")
 
     def initialize(self) -> None:
@@ -344,7 +349,8 @@ class SQLiteStore:
         self._connection.close()
 
     def __enter__(self) -> "SQLiteStore":
-        self.initialize()
+        if not self.read_only:
+            self.initialize()
         return self
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:

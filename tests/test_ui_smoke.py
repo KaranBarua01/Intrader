@@ -10,7 +10,9 @@ from types import SimpleNamespace
 
 from PySide6.QtWidgets import QApplication
 
-from intrader.ui.components import MarketChart
+from intrader.ui.components import (
+    BEARISH_COLOR, BULLISH_COLOR, MarketChart, TriangleDockButton,
+)
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.strategy_lab_page import StrategyLabPage
 from intrader.ui.utility_pages import (
@@ -99,8 +101,8 @@ def test_time_travel_range_results_render_without_fake_data() -> None:
 
     page.set_range_analysis(analysis, opening, ())
 
-    assert page.range_change.value_label.text() == "N/A"
-    assert page.range_sessions.value_label.text() == "0"
+    assert page.range_metrics.value("NIFTY") == "N/A"
+    assert page.range_metrics.value("SESSIONS") == "0"
     assert page.range_coverage.rowCount() == 1
     assert "No evidence available." in page.range_notes.text.toPlainText()
 
@@ -126,9 +128,9 @@ def test_strategy_lab_is_separate_research_mode() -> None:
     )
     page.set_snapshot(snapshot)
 
-    assert page.total_signals.value_label.text() == "0"
-    assert page.active_strategies.value_label.text() == "0"
-    assert page.best_hit.value_label.text() == "N/A"
+    assert page.metrics.value("SIGNALS") == "0"
+    assert page.metrics.value("ACTIVE") == "0"
+    assert page.metrics.value("BEST 30M") == "N/A"
     assert "LAB ONLY" in page.notes.text.toPlainText()
 
 
@@ -166,3 +168,47 @@ def test_time_travel_marks_results_stale_when_inputs_change() -> None:
     app.processEvents()
 
     assert "Analyze Period to refresh" in page.range_state.text()
+
+
+
+def test_market_chart_exposes_candle_timeframes_and_aggregates() -> None:
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from intrader.historical import Candle, INDIA_TIME
+
+    app = QApplication.instance() or QApplication([])
+    chart = MarketChart()
+    start = datetime(2026, 9, 25, 9, 15, tzinfo=INDIA_TIME)
+    candles = tuple(
+        Candle(
+            start + timedelta(minutes=i),
+            Decimal(str(100 + i)),
+            Decimal(str(101 + i)),
+            Decimal(str(99 + i)),
+            Decimal(str(100.5 + i)),
+            1000 + i,
+        )
+        for i in range(5)
+    )
+
+    assert set(chart.timeframe_buttons) == {
+        "1m", "3m", "5m", "15m", "30m", "1H", "Auto"
+    }
+
+    chart.set_candle_objects(candles)
+    chart.set_timeframe("5m")
+
+    assert chart.selected_timeframe() == "5m"
+    assert chart.candles.boundingRect().width() > 0
+
+
+def test_dock_triangle_uses_candlestick_direction_colors() -> None:
+    app = QApplication.instance() or QApplication([])
+    button = TriangleDockButton()
+
+    assert BULLISH_COLOR == "#2d8a60"
+    assert BEARISH_COLOR == "#c64b4b"
+    assert button.dock_open() is False
+
+    button.set_dock_open(True)
+    assert button.dock_open() is True

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -22,6 +22,7 @@ from intrader.ui.utility_pages import (
     ResearchBrowserPage, ShadowTraderPage, SystemHealthPage, ThesisPage,
     TradeHistoryPage,
 )
+from intrader.historical import INDIA_TIME
 from intrader.storage import SQLiteStore
 
 
@@ -194,17 +195,23 @@ class MainWindow(QMainWindow):
     def refresh_all(self) -> None:
         self.refresh_button.setEnabled(False)
         def task():
-            desktop = self.service.snapshot()
+            now = datetime.now(INDIA_TIME)
+            news_error = None
+            try:
+                self.service.refresh_global_news(end=now)
+            except Exception as exc:
+                news_error = str(exc) or exc.__class__.__name__
+            desktop = self.service.snapshot(now)
             manager = self.service.records_manager()
             candles = ()
             candle_error = None
             try:
-                candles = self.service.load_nifty_candles(date.today())
+                candles = self.service.load_nifty_candles(now.date())
             except Exception as exc:
                 candle_error = str(exc) or exc.__class__.__name__
-            return desktop, manager, candles, candle_error
+            return desktop, manager, candles, candle_error, news_error
         def done(payload) -> None:
-            desktop, manager, candles, candle_error = payload
+            desktop, manager, candles, candle_error, news_error = payload
             self.refresh_button.setEnabled(True)
             self.dashboard_page.refresh(desktop, manager)
             self.intrader_page.refresh_snapshot(desktop)
@@ -215,10 +222,15 @@ class MainWindow(QMainWindow):
             self.records_page.refresh(manager)
             self.history_page.refresh(desktop)
             self.health_page.refresh(desktop)
+            issues = []
             if candle_error:
-                self.statusBar().showMessage(f"Local data refreshed. Candle refresh unavailable: {candle_error}", 8000)
+                issues.append(f"Candles: {candle_error}")
+            if news_error:
+                issues.append(f"Global news: {news_error}")
+            if issues:
+                self.statusBar().showMessage("Local data refreshed. " + " | ".join(issues), 9000)
             else:
-                self.statusBar().showMessage("Intrader data refreshed.", 4000)
+                self.statusBar().showMessage("Intrader data and global context refreshed.", 4000)
         def failed(message: str) -> None:
             self.refresh_button.setEnabled(True)
             self._show_error(message)
@@ -227,11 +239,18 @@ class MainWindow(QMainWindow):
     def load_time_travel(self) -> None:
         self.time_page.load_button.setEnabled(False)
         day = self.time_page.selected_day()
+        end = self.time_page.selected_end_datetime()
+        start = end - timedelta(minutes=30)
         def task():
+            try:
+                self.service.refresh_global_news(start=start, end=end)
+            except Exception:
+                pass
             return (
                 self.service.decisions_for_day(day),
                 self.service.completed_for_day(day),
                 self.service.load_nifty_candles(day),
+                self.service.news_for_window(start, end),
             )
         def done(payload) -> None:
             self.time_page.load_button.setEnabled(True)

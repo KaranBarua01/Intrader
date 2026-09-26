@@ -17,6 +17,7 @@ from intrader.historical import Candle, INDIA_TIME, fetch_candles
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
 from intrader.storage import SQLiteStore
+from intrader.strategy_lab import analyze_strategies
 from intrader.ui.paths import database_path as default_database_path
 
 
@@ -330,6 +331,30 @@ class DesktopDataService:
         if after != before:
             raise RuntimeError("historical reanalysis mutated immutable history")
         return record
+
+    def analyze_strategy_range(self, start: datetime, end: datetime):
+        """Run Strategy Lab on the same historical candle range used by Time Travel."""
+
+        candles = self.load_nifty_candle_range(
+            start,
+            end,
+            backfill_missing=True,
+        )
+        with SQLiteStore(self.database_path) as store:
+            decisions = tuple(
+                decision
+                for decision in store.load_decision_records()
+                if start
+                <= decision.decided_at.astimezone(start.tzinfo)
+                <= end
+            )
+        snapshot = analyze_strategies(
+            candles,
+            decisions,
+            start,
+            end,
+        )
+        return snapshot
 
     def calibration_report(self):
         from intrader.calibration_pipeline import run_calibration

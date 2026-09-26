@@ -7,8 +7,8 @@ from decimal import Decimal
 
 from PySide6.QtCore import QDate, QTime, QTimer, Qt
 from PySide6.QtWidgets import (
-    QDateEdit, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-    QSlider, QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QDateEdit, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
+    QPushButton, QSlider, QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
 )
 import pyqtgraph as pg
 
@@ -349,8 +349,10 @@ class TimeTravelPage(QWidget):
         header.addWidget(QLabel("Replay end"))
         self.day = QDateEdit(QDate.currentDate())
         self.day.setCalendarPopup(True)
+        self.day.setDisplayFormat("dd MMM yyyy")
         self.end_time = QTimeEdit(QTime.currentTime())
         self.end_time.setDisplayFormat("HH:mm")
+        self.end_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.load_button = QPushButton("Load 30-Minute Window")
         self.load_button.setObjectName("PrimaryButton")
         self.replay_enrich_button = QPushButton("Fetch Missing")
@@ -431,15 +433,19 @@ class TimeTravelPage(QWidget):
         date_row.addWidget(QLabel("From"))
         self.range_from_day = QDateEdit(QDate.currentDate().addDays(-5))
         self.range_from_day.setCalendarPopup(True)
+        self.range_from_day.setDisplayFormat("dd MMM yyyy")
         self.range_from_time = QTimeEdit(QTime(9, 15))
         self.range_from_time.setDisplayFormat("HH:mm")
+        self.range_from_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         date_row.addWidget(self.range_from_day)
         date_row.addWidget(self.range_from_time)
         date_row.addWidget(QLabel("To"))
         self.range_to_day = QDateEdit(QDate.currentDate())
         self.range_to_day.setCalendarPopup(True)
+        self.range_to_day.setDisplayFormat("dd MMM yyyy")
         self.range_to_time = QTimeEdit(QTime(15, 30))
         self.range_to_time.setDisplayFormat("HH:mm")
+        self.range_to_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         date_row.addWidget(self.range_to_day)
         date_row.addWidget(self.range_to_time)
         self.range_load_button = QPushButton("Analyze Period")
@@ -834,23 +840,14 @@ class AnalysisModePage(QWidget):
         title.setObjectName("PageTitle")
         root.addWidget(title)
 
-        self.pnl = MetricCard("ADJUSTED P&L")
-        self.win_rate = MetricCard("WIN RATE")
-        self.expectancy = MetricCard("EXPECTANCY")
-        self.profit_factor = MetricCard("PROFIT FACTOR")
-        self.drawdown = MetricCard("MAX DRAWDOWN")
-        self.trades = MetricCard("COMPLETED TRADES")
-        self.metrics = ResponsiveMetricGrid(
-            [
-                self.pnl,
-                self.win_rate,
-                self.expectancy,
-                self.profit_factor,
-                self.drawdown,
-                self.trades,
-            ],
-            compact_height=74,
-        )
+        self.metrics = MetricRibbon([
+            ("P&L", "0"),
+            ("WIN RATE", "N/A"),
+            ("EXPECTANCY", "N/A"),
+            ("PROFIT FACTOR", "N/A"),
+            ("DRAWDOWN", "0"),
+            ("TRADES", "0"),
+        ])
         root.addWidget(self.metrics)
 
         self.analysis_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -910,19 +907,23 @@ class AnalysisModePage(QWidget):
 
     def refresh_manager(self, snapshot, completed_bundles) -> None:
         overall = snapshot.overall
-        self.pnl.set_value(str(overall.adjusted_pnl), _tone(overall.adjusted_pnl))
-        self.win_rate.set_value(
-            "N/A" if overall.win_rate is None else f"{overall.win_rate:.2f}%"
+        self.metrics.set_metric(
+            "P&L", str(overall.adjusted_pnl), _tone(overall.adjusted_pnl)
         )
-        self.expectancy.set_value(
-            _text(overall.expectancy), _tone(overall.expectancy)
+        self.metrics.set_metric(
+            "WIN RATE",
+            "N/A" if overall.win_rate is None else f"{overall.win_rate:.2f}%",
         )
-        self.profit_factor.set_value(_text(overall.profit_factor))
-        self.drawdown.set_value(
+        self.metrics.set_metric(
+            "EXPECTANCY", _text(overall.expectancy), _tone(overall.expectancy)
+        )
+        self.metrics.set_metric("PROFIT FACTOR", _text(overall.profit_factor))
+        self.metrics.set_metric(
+            "DRAWDOWN",
             str(overall.max_drawdown),
             "negative" if overall.max_drawdown > 0 else "neutral",
         )
-        self.trades.set_value(str(overall.trades))
+        self.metrics.set_metric("TRADES", str(overall.trades))
 
         self.equity_plot.clear()
         if not completed_bundles:

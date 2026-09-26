@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class StorageError(Exception):
@@ -144,6 +144,99 @@ class SQLiteStore:
                     impact TEXT NOT NULL CHECK(impact IN ('HIGH', 'MEDIUM', 'LOW')),
                     PRIMARY KEY (source, category, scheduled_at_utc)
                 );
+
+                CREATE TABLE IF NOT EXISTS decision_records (
+                    decision_id TEXT PRIMARY KEY,
+                    decided_at_utc TEXT NOT NULL,
+                    session_date TEXT NOT NULL,
+                    brain_version TEXT NOT NULL,
+                    rule_version TEXT NOT NULL,
+                    brain_state TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    rejected_action TEXT,
+                    direction_score REAL NOT NULL,
+                    entry_quality REAL NOT NULL,
+                    reversal_risk REAL NOT NULL,
+                    confidence REAL NOT NULL,
+                    family_coverage REAL NOT NULL,
+                    regime TEXT NOT NULL,
+                    spot_price REAL NOT NULL,
+                    future_price REAL,
+                    vix REAL NOT NULL,
+                    ema9 REAL NOT NULL,
+                    ema20 REAL NOT NULL,
+                    rsi14 REAL NOT NULL,
+                    atr14 REAL NOT NULL,
+                    opening_range_high REAL NOT NULL,
+                    opening_range_low REAL NOT NULL,
+                    future_oi INTEGER NOT NULL,
+                    future_oi_change INTEGER NOT NULL,
+                    future_volume_change INTEGER NOT NULL,
+                    basis REAL NOT NULL,
+                    basis_change REAL NOT NULL,
+                    oi_pcr REAL,
+                    volume_pcr REAL,
+                    breadth_pct REAL,
+                    depth_imbalance REAL,
+                    high_impact_event_active INTEGER NOT NULL CHECK(high_impact_event_active IN (0, 1))
+                );
+
+                CREATE TABLE IF NOT EXISTS decision_families (
+                    decision_id TEXT NOT NULL,
+                    family_name TEXT NOT NULL,
+                    family_weight REAL NOT NULL,
+                    family_value REAL NOT NULL,
+                    PRIMARY KEY (decision_id, family_name),
+                    FOREIGN KEY (decision_id) REFERENCES decision_records(decision_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS decision_reasons (
+                    decision_id TEXT NOT NULL,
+                    thesis TEXT NOT NULL CHECK(thesis IN ('CHOSEN', 'REJECTED', 'GATE')),
+                    reason_code TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    evidence_value REAL,
+                    expected_direction INTEGER NOT NULL CHECK(expected_direction IN (-1, 0, 1)),
+                    explanation TEXT NOT NULL,
+                    PRIMARY KEY (decision_id, thesis, reason_code),
+                    FOREIGN KEY (decision_id) REFERENCES decision_records(decision_id)
+                );
+
+                CREATE TRIGGER IF NOT EXISTS decision_records_no_update
+                BEFORE UPDATE ON decision_records
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision records are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS decision_records_no_delete
+                BEFORE DELETE ON decision_records
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision records are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS decision_families_no_update
+                BEFORE UPDATE ON decision_families
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision families are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS decision_families_no_delete
+                BEFORE DELETE ON decision_families
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision families are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS decision_reasons_no_update
+                BEFORE UPDATE ON decision_reasons
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision reasons are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS decision_reasons_no_delete
+                BEFORE DELETE ON decision_reasons
+                BEGIN
+                    SELECT RAISE(ABORT, 'decision reasons are immutable');
+                END;
                 """
             )
             self._connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -623,6 +716,217 @@ class SQLiteStore:
             for row in rows
         )
 
+    def store_decision_record(self, record) -> bool:
+        """Insert one immutable pre-outcome decision and its reasoning."""
+
+        try:
+            existing = self._connection.execute(
+                "SELECT 1 FROM decision_records WHERE decision_id = ?",
+                (record.decision_id,),
+            ).fetchone()
+            if existing is not None:
+                return False
+
+            with self._connection:
+                self._connection.execute(
+                    """
+                    INSERT INTO decision_records (
+                        decision_id, decided_at_utc, session_date,
+                        brain_version, rule_version, brain_state, action,
+                        rejected_action, direction_score, entry_quality,
+                        reversal_risk, confidence, family_coverage, regime,
+                        spot_price, future_price, vix, ema9, ema20, rsi14,
+                        atr14, opening_range_high, opening_range_low,
+                        future_oi, future_oi_change, future_volume_change,
+                        basis, basis_change, oi_pcr, volume_pcr, breadth_pct,
+                        depth_imbalance, high_impact_event_active
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        record.decision_id,
+                        _utc_iso(record.decided_at),
+                        record.session_date.isoformat(),
+                        record.brain_version,
+                        record.rule_version,
+                        record.brain_state,
+                        record.action,
+                        record.rejected_action,
+                        float(record.direction_score),
+                        float(record.entry_quality),
+                        float(record.reversal_risk),
+                        float(record.confidence),
+                        float(record.family_coverage),
+                        record.regime,
+                        float(record.spot_price),
+                        None if record.future_price is None else float(record.future_price),
+                        float(record.vix),
+                        float(record.ema9),
+                        float(record.ema20),
+                        float(record.rsi14),
+                        float(record.atr14),
+                        float(record.opening_range_high),
+                        float(record.opening_range_low),
+                        record.future_oi,
+                        record.future_oi_change,
+                        record.future_volume_change,
+                        float(record.basis),
+                        float(record.basis_change),
+                        None if record.oi_pcr is None else float(record.oi_pcr),
+                        None if record.volume_pcr is None else float(record.volume_pcr),
+                        None if record.breadth_pct is None else float(record.breadth_pct),
+                        None if record.depth_imbalance is None else float(record.depth_imbalance),
+                        1 if record.high_impact_event_active else 0,
+                    ),
+                )
+                self._connection.executemany(
+                    """
+                    INSERT INTO decision_families
+                        (decision_id, family_name, family_weight, family_value)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            record.decision_id,
+                            family.name,
+                            float(family.weight),
+                            float(family.value),
+                        )
+                        for family in record.families
+                    ],
+                )
+                self._connection.executemany(
+                    """
+                    INSERT INTO decision_reasons
+                        (decision_id, thesis, reason_code, category,
+                         evidence_value, expected_direction, explanation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            record.decision_id,
+                            reason.thesis,
+                            reason.reason_code,
+                            reason.category,
+                            None if reason.evidence_value is None else float(reason.evidence_value),
+                            reason.expected_direction,
+                            reason.explanation,
+                        )
+                        for reason in record.reasons
+                    ],
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite decision record write failed") from None
+        return True
+
+    def load_decision_record(self, decision_id: str):
+        """Load one immutable decision with family evidence and reasons."""
+
+        try:
+            row = self._connection.execute(
+                """
+                SELECT decision_id, decided_at_utc, session_date, brain_version,
+                       rule_version, brain_state, action, rejected_action,
+                       direction_score, entry_quality, reversal_risk, confidence,
+                       family_coverage, regime, spot_price, future_price, vix,
+                       ema9, ema20, rsi14, atr14, opening_range_high,
+                       opening_range_low, future_oi, future_oi_change,
+                       future_volume_change, basis, basis_change, oi_pcr,
+                       volume_pcr, breadth_pct, depth_imbalance,
+                       high_impact_event_active
+                FROM decision_records
+                WHERE decision_id = ?
+                """,
+                (decision_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            family_rows = self._connection.execute(
+                """
+                SELECT family_name, family_weight, family_value
+                FROM decision_families
+                WHERE decision_id = ?
+                ORDER BY family_name
+                """,
+                (decision_id,),
+            ).fetchall()
+            reason_rows = self._connection.execute(
+                """
+                SELECT thesis, reason_code, category, evidence_value,
+                       expected_direction, explanation
+                FROM decision_reasons
+                WHERE decision_id = ?
+                ORDER BY thesis, reason_code
+                """,
+                (decision_id,),
+            ).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite decision record read failed") from None
+
+        from intrader.market_brain import FamilyEvidence
+        from intrader.records import DecisionReason, DecisionRecord
+
+        families = tuple(
+            FamilyEvidence(
+                name=str(item[0]),
+                weight=Decimal(str(item[1])),
+                value=Decimal(str(item[2])),
+            )
+            for item in family_rows
+        )
+        reasons = tuple(
+            DecisionReason(
+                thesis=str(item[0]),
+                reason_code=str(item[1]),
+                category=str(item[2]),
+                evidence_value=None if item[3] is None else Decimal(str(item[3])),
+                expected_direction=int(item[4]),
+                explanation=str(item[5]),
+            )
+            for item in reason_rows
+        )
+        from datetime import date
+
+        return DecisionRecord(
+            decision_id=str(row[0]),
+            decided_at=datetime.fromisoformat(row[1]),
+            session_date=date.fromisoformat(row[2]),
+            brain_version=str(row[3]),
+            rule_version=str(row[4]),
+            brain_state=str(row[5]),
+            action=str(row[6]),
+            rejected_action=None if row[7] is None else str(row[7]),
+            direction_score=Decimal(str(row[8])),
+            entry_quality=Decimal(str(row[9])),
+            reversal_risk=Decimal(str(row[10])),
+            confidence=Decimal(str(row[11])),
+            family_coverage=Decimal(str(row[12])),
+            regime=str(row[13]),
+            spot_price=Decimal(str(row[14])),
+            future_price=None if row[15] is None else Decimal(str(row[15])),
+            vix=Decimal(str(row[16])),
+            ema9=Decimal(str(row[17])),
+            ema20=Decimal(str(row[18])),
+            rsi14=Decimal(str(row[19])),
+            atr14=Decimal(str(row[20])),
+            opening_range_high=Decimal(str(row[21])),
+            opening_range_low=Decimal(str(row[22])),
+            future_oi=int(row[23]),
+            future_oi_change=int(row[24]),
+            future_volume_change=int(row[25]),
+            basis=Decimal(str(row[26])),
+            basis_change=Decimal(str(row[27])),
+            oi_pcr=None if row[28] is None else Decimal(str(row[28])),
+            volume_pcr=None if row[29] is None else Decimal(str(row[29])),
+            breadth_pct=None if row[30] is None else Decimal(str(row[30])),
+            depth_imbalance=None if row[31] is None else Decimal(str(row[31])),
+            high_impact_event_active=bool(row[32]),
+            families=families,
+            reasons=reasons,
+        )
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -878,7 +1182,8 @@ class SQLiteStore:
         if table not in {
             "candles", "oi_observations", "option_snapshots",
             "index_snapshots", "future_snapshots", "breadth_snapshots",
-            "news_items", "scheduled_events",
+            "news_items", "scheduled_events", "decision_records",
+            "decision_families", "decision_reasons",
         }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

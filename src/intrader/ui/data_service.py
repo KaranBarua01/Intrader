@@ -10,7 +10,7 @@ from intrader.auth import RequestsTransport, authenticate
 from intrader.checkpoint2 import check_market_access
 from intrader.config import load_config
 from intrader.credentials import CredentialStore
-from intrader.global_news import fetch_global_market_news
+from intrader.global_news import fetch_global_market_news, market_relevance_score
 from intrader.historical_intelligence import analyze_historical_range, build_opening_possibilities
 from intrader.historical_reanalysis import reanalyze_stored_decision
 from intrader.historical import Candle, INDIA_TIME, fetch_candles
@@ -41,7 +41,13 @@ class DesktopDataService:
             decisions = store.load_decision_records()
             unsettled = store.load_unsettled_shadow_trades()
             completed = store.load_completed_shadow_bundles()
-            news = store.load_news_items(start=now - timedelta(hours=24), end=now)
+            news = tuple(
+                item
+                for item in store.load_news_items(
+                    start=now - timedelta(hours=24), end=now
+                )
+                if market_relevance_score(item.title, item.source) >= 3
+            )
             events = store.load_scheduled_events(
                 start=now - timedelta(minutes=15),
                 end=now + timedelta(hours=24),
@@ -91,7 +97,11 @@ class DesktopDataService:
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             return ()
         with SQLiteStore(self.database_path, read_only=True) as store:
-            return store.load_news_items(start=start, end=end)
+            return tuple(
+                item
+                for item in store.load_news_items(start=start, end=end)
+                if market_relevance_score(item.title, item.source) >= 3
+            )
 
     def records_manager(self):
         from intrader.records_manager_pipeline import build_records_manager
@@ -262,7 +272,11 @@ class DesktopDataService:
                 b for b in store.load_completed_shadow_bundles()
                 if start <= b[1].opened_at.astimezone(start.tzinfo) <= end
             )
-            news = store.load_news_items(start=start, end=end)
+            news = tuple(
+                item
+                for item in store.load_news_items(start=start, end=end)
+                if market_relevance_score(item.title, item.source) >= 3
+            )
             events = store.load_scheduled_events(start=start, end=end)
             coverage_counts = {
                 "Candles": len(candles),
@@ -299,9 +313,13 @@ class DesktopDataService:
             opening_as_of = reference_close
 
         with SQLiteStore(self.database_path, read_only=True) as store:
-            post_close_news = store.load_news_items(
-                start=reference_close,
-                end=opening_as_of,
+            post_close_news = tuple(
+                item
+                for item in store.load_news_items(
+                    start=reference_close,
+                    end=opening_as_of,
+                )
+                if market_relevance_score(item.title, item.source) >= 3
             )
             upcoming_events = store.load_scheduled_events(
                 start=reference_close,

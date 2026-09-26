@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import QUrl, Signal, Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
-from intrader.ui.components import Card, DataTable, DecisionCard, MetricCard, ReasonList, StatusPill
+from intrader.ui.components import (
+    Card, DataTable, DecisionCard, MetricCard, ReasonList, ResponsiveMetricGrid,
+    StatusPill,
+)
 
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -25,50 +28,107 @@ class DashboardPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(10, 10, 10, 34)
+        root.setSpacing(8)
         title = QLabel("Dashboard")
         title.setObjectName("PageTitle")
         root.addWidget(title)
-        row = QHBoxLayout()
+
+        top = QHBoxLayout()
         self.decision = DecisionCard()
-        row.addWidget(self.decision, 2)
+        top.addWidget(self.decision, 3)
         self.equity = MetricCard("SHADOW EQUITY")
         self.pnl = MetricCard("ADJUSTED P&L")
         self.trades = MetricCard("TRADES")
         self.win = MetricCard("WIN RATE")
-        for card in (self.equity, self.pnl, self.trades, self.win):
-            row.addWidget(card)
-        root.addLayout(row)
-        lower = QHBoxLayout()
+        self.metric_grid = ResponsiveMetricGrid(
+            [self.equity, self.pnl, self.trades, self.win],
+            compact_height=76,
+        )
+        top.addWidget(self.metric_grid, 5)
+        root.addLayout(top)
+
+        self.dashboard_splitter = QSplitter(Qt.Orientation.Horizontal)
         health = Card("SYSTEM SNAPSHOT")
         self.health_text = QLabel("Waiting for refresh.")
         self.health_text.setWordWrap(True)
         health.add_widget(self.health_text)
-        lower.addWidget(health)
+        self.dashboard_splitter.addWidget(health)
+
         context = Card("RECENT CONTEXT")
         self.context = DataTable(["Time", "Source", "Context"])
         context.add_widget(self.context)
-        lower.addWidget(context, 2)
-        root.addLayout(lower, 1)
+        self.dashboard_splitter.addWidget(context)
+        self.dashboard_splitter.setStretchFactor(0, 2)
+        self.dashboard_splitter.setStretchFactor(1, 5)
+        root.addWidget(self.dashboard_splitter, 1)
+
+    def resizeEvent(self, event) -> None:
+        self.dashboard_splitter.setOrientation(
+            Qt.Orientation.Vertical
+            if event.size().width() < 900
+            else Qt.Orientation.Horizontal
+        )
+        super().resizeEvent(event)
+
+    def apply_layout_preset(self, preset: str) -> None:
+        width = max(1, self.width())
+        if preset == "Monitoring":
+            self.dashboard_splitter.setSizes([int(width * 0.35), int(width * 0.65)])
+        elif preset == "Analysis":
+            self.dashboard_splitter.setSizes([int(width * 0.22), int(width * 0.78)])
+        else:
+            self.dashboard_splitter.setSizes([int(width * 0.28), int(width * 0.72)])
 
     def refresh(self, desktop, manager) -> None:
         d = desktop.latest_decision
         if d is None:
-            self.decision.set_decision("WAITING FOR DATA")
+            self.decision.set_decision(
+                "WAITING FOR DATA",
+                "No immutable Market Brain decision recorded yet.",
+            )
         else:
-            self.decision.set_decision(d.action, f"{d.regime} • {d.brain_version}")
+            self.decision.set_decision(
+                d.action, f"{d.regime} • {d.brain_version}"
+            )
         self.equity.set_value(str(manager.current_equity))
         self.pnl.set_value(str(manager.overall.adjusted_pnl))
         self.trades.set_value(str(manager.overall.trades))
-        self.win.set_value("N/A" if manager.overall.win_rate is None else f"{manager.overall.win_rate:.2f}%")
-        good = sum(1 for _, count in desktop.database_counts if count >= 0)
-        self.health_text.setText(f"Database tables readable: {good}/{len(desktop.database_counts)}\nActive shadow: {'YES' if desktop.active_shadow_trade else 'NO'}")
+        self.win.set_value(
+            "N/A"
+            if manager.overall.win_rate is None
+            else f"{manager.overall.win_rate:.2f}%"
+        )
+        available = sum(
+            1 for _, count in desktop.database_counts if count > 0
+        )
+        empty = sum(
+            1 for _, count in desktop.database_counts if count == 0
+        )
+        errors = sum(
+            1 for _, count in desktop.database_counts if count < 0
+        )
+        self.health_text.setText(
+            f"Available data families: {available}\n"
+            f"Empty: {empty} • Errors: {errors}\n"
+            f"Active shadow position: {'YES' if desktop.active_shadow_trade else 'NO'}"
+        )
         rows = []
         for event in desktop.upcoming_events[:5]:
-            rows.append([event.scheduled_at.strftime("%H:%M"), event.source, event.name])
+            rows.append([
+                event.scheduled_at.strftime("%H:%M"),
+                event.source,
+                event.name,
+            ])
         for item in desktop.recent_news[:5]:
-            rows.append([item.published_at.strftime("%H:%M"), item.source, item.title])
-        self.context.set_rows(rows)
+            rows.append([
+                item.published_at.strftime("%H:%M"),
+                item.source,
+                item.title,
+            ])
+        self.context.set_rows(
+            rows or [["—", "—", "No recent market context. Refresh when needed."]]
+        )
 
 
 class ThesisPage(QWidget):

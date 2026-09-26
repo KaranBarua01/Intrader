@@ -29,11 +29,13 @@ def test_bottom_dock_is_hidden_until_requested(monkeypatch) -> None:
 
     assert window.bottom_dock.isHidden()
     assert window.dock_handle.isVisible()
+    assert window.dock_handle.dock_open() is False
 
     window.toggle_bottom_dock()
     app.processEvents()
 
     assert window.bottom_dock.isVisible()
+    assert window.dock_handle.dock_open() is True
     assert window.bottom_dock.geometry().left() >= 0
     assert window.bottom_dock.geometry().right() <= window.centralWidget().width()
 

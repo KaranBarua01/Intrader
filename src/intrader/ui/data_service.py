@@ -57,6 +57,12 @@ class DesktopDataService:
                     counts.append((table, store.count(table)))
                 except Exception:
                     counts.append((table, -1))
+            counts.append(
+                (
+                    "order_flow_context",
+                    sum(1 for d in decisions if d.depth_imbalance is not None),
+                )
+            )
         return DesktopSnapshot(
             latest_decision=None if not decisions else decisions[-1],
             active_shadow_trade=None if not unsettled else unsettled[-1],

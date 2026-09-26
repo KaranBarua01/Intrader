@@ -1,10 +1,13 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import sqlite3
 
 import pytest
 
 from intrader.historical import Candle, OIObservation
 from intrader.instruments import Instrument, NiftyInstruments
+from intrader.market_brain import FamilyEvidence
+from intrader.records import DecisionReason, DecisionRecord
 from intrader.storage import MarketSnapshotSink, OptionSnapshotSink, SQLiteStore, StorageError
 from intrader.stream_protocol import DepthLevel, MarketTick
 
@@ -52,7 +55,7 @@ def test_schema_initializes_twice_with_wal_and_reopens(tmp_path) -> None:
     store.initialize()
 
     assert store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 5
     store.store_candles(_bundle().spot, "ONE_MINUTE", [_candle()])
     store.close()
 
@@ -264,3 +267,93 @@ def test_market_snapshot_sink_persists_spot_vix_and_future_order_flow(tmp_path) 
     assert future[0].best_ask_price == Decimal("23201.0")
     assert future[0].depth_buy_quantity == 1800
     assert future[0].depth_sell_quantity == 1600
+
+
+
+def _decision_record() -> DecisionRecord:
+    return DecisionRecord(
+        decision_id="DEC-TEST-1",
+        decided_at=NOW,
+        session_date=NOW.date(),
+        brain_version="brain-v0.1",
+        rule_version="rules-v0.1",
+        brain_state="BULLISH SETUP",
+        action="BUY_CALL",
+        rejected_action="BUY_PUT",
+        direction_score=Decimal("62"),
+        entry_quality=Decimal("70"),
+        reversal_risk=Decimal("30"),
+        confidence=Decimal("75"),
+        family_coverage=Decimal("100"),
+        regime="TRENDING_UP",
+        spot_price=Decimal("23150"),
+        future_price=Decimal("23200"),
+        vix=Decimal("12.4"),
+        ema9=Decimal("23140"),
+        ema20=Decimal("23120"),
+        rsi14=Decimal("63"),
+        atr14=Decimal("30"),
+        opening_range_high=Decimal("23100"),
+        opening_range_low=Decimal("23020"),
+        future_oi=100000,
+        future_oi_change=5000,
+        future_volume_change=25000,
+        basis=Decimal("50"),
+        basis_change=Decimal("8"),
+        oi_pcr=Decimal("1.2"),
+        volume_pcr=Decimal("1.1"),
+        breadth_pct=Decimal("32"),
+        depth_imbalance=Decimal("0.25"),
+        high_impact_event_active=False,
+        families=(
+            FamilyEvidence("PRICE", Decimal("30"), Decimal("0.7")),
+        ),
+        reasons=(
+            DecisionReason(
+                "CHOSEN",
+                "PRICE_SUPPORTS_CALL",
+                "PRICE",
+                Decimal("0.7"),
+                1,
+                "Price supports call.",
+            ),
+            DecisionReason(
+                "REJECTED",
+                "REJECT_BUY_PUT_PRICE",
+                "PRICE",
+                Decimal("0.7"),
+                1,
+                "Price rejects put.",
+            ),
+        ),
+    )
+
+
+def test_decision_ledger_is_idempotent_and_immutable(tmp_path) -> None:
+    record = _decision_record()
+
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        assert store.store_decision_record(record) is True
+        assert store.store_decision_record(record) is False
+        assert store.count("decision_records") == 1
+        assert store.count("decision_families") == 1
+        assert store.count("decision_reasons") == 2
+
+        loaded = store.load_decision_record(record.decision_id)
+        assert loaded is not None
+        assert loaded.action == "BUY_CALL"
+        assert loaded.rejected_action == "BUY_PUT"
+        assert loaded.reasons == record.reasons
+
+        with pytest.raises(sqlite3.IntegrityError):
+            store._connection.execute(
+                "UPDATE decision_records SET action = 'BUY_PUT' "
+                "WHERE decision_id = ?",
+                (record.decision_id,),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            store._connection.execute(
+                "DELETE FROM decision_reasons WHERE decision_id = ?",
+                (record.decision_id,),
+            )

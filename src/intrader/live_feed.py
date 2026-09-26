@@ -35,12 +35,14 @@ class LiveFeed:
         *,
         socket_factory: Callable = websocket.WebSocketApp,
         tick_sink: Callable[[MarketTick], None] | None = None,
+        breadth_tokens: tuple[str, ...] = (),
     ) -> None:
         self._session_provider = session_provider
         self._instruments = instruments
         self._health = health
         self._socket_factory = socket_factory
         self._tick_sink = tick_sink
+        self._breadth_tokens = tuple(dict.fromkeys(breadth_tokens))
         self._stop = threading.Event()
         self._active = None
 

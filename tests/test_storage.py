@@ -462,3 +462,13 @@ def test_shadow_outcome_is_idempotent_and_immutable(tmp_path) -> None:
                 "UPDATE shadow_outcomes SET gross_pnl = 0 WHERE trade_id = ?",
                 (trade.trade_id,),
             )
+
+
+
+def test_read_only_store_reads_existing_database_without_initializing(tmp_path) -> None:
+    path = tmp_path / "readonly.db"
+    with SQLiteStore(path) as store:
+        assert store.count("candles") == 0
+
+    with SQLiteStore(path, read_only=True) as store:
+        assert store.count("candles") == 0

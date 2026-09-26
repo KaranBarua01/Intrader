@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import QDate, QThread, QTime, Signal, Qt
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPushButton, QStackedWidget, QVBoxLayout, QWidget,
@@ -392,16 +392,10 @@ class MainWindow(QMainWindow):
     def open_strategy_replay(self, at) -> None:
         replay_end = at.astimezone(INDIA_TIME) + timedelta(minutes=15)
         self.time_page.day.setDate(
-            self.time_page.day.date().fromString(
-                replay_end.strftime("%Y-%m-%d"),
-                "yyyy-MM-dd",
-            )
+            QDate(replay_end.year, replay_end.month, replay_end.day)
         )
         self.time_page.end_time.setTime(
-            self.time_page.end_time.time().fromString(
-                replay_end.strftime("%H:%M"),
-                "HH:mm",
-            )
+            QTime(replay_end.hour, replay_end.minute)
         )
         self.time_page.tabs.setCurrentIndex(0)
         self.show_page("Time Travel")

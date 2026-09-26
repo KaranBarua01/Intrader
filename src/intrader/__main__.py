@@ -26,6 +26,7 @@ from intrader.historical import INDIA_TIME
 from intrader.live_feed import LiveFeed
 from intrader.market_confirmation_pipeline import build_stored_market_confirmation
 from intrader.options_pipeline import OptionsPipelineError, build_stored_options_intelligence
+from intrader.outcome_pipeline import OutcomePipelinePending, settle_shadow_trade
 from intrader.price_pipeline import PricePipelineError, build_stored_price_structure
 from intrader.records_pipeline import record_stored_decision
 from intrader.secrets import REQUIRED_SECRET_NAMES
@@ -663,6 +664,69 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Timeout: {trade.max_minutes} minutes")
         return 0
 
+    if argv and argv[0] == "settle-shadow":
+        if len(argv) != 4:
+            print(
+                "Usage: python -m intrader settle-shadow "
+                "TRADE_ID YYYY-MM-DD HH:MM"
+            )
+            return 2
+        trade_id = argv[1]
+        try:
+            as_of = _parse_india_datetime(argv[2], argv[3])
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                as_of=as_of.date(),
+                session=session,
+            )
+            with SQLiteStore(_database_path()) as db_store:
+                result = settle_shadow_trade(
+                    db_store,
+                    market.instruments,
+                    trade_id,
+                    as_of,
+                )
+        except OutcomePipelinePending as exc:
+            print("SHADOW OUTCOME: PENDING")
+            print(f"Reason: {exc}")
+            return 0
+        except Exception:
+            print("SHADOW OUTCOME UNAVAILABLE")
+            return 1
+
+        outcome = result.outcome
+        print(
+            "SHADOW OUTCOME RECORDED"
+            if result.inserted
+            else "SHADOW OUTCOME ALREADY RECORDED"
+        )
+        print(f"Trade ID: {outcome.trade_id}")
+        print(f"Exit reason: {outcome.exit_reason}")
+        print(f"Exit price: {outcome.exit_price}")
+        print(f"Gross P&L: {outcome.gross_pnl}")
+        print(f"Estimated friction: {outcome.estimated_friction}")
+        print(f"Adjusted P&L: {outcome.adjusted_pnl}")
+        print(f"MFE amount: {outcome.mfe_amount}")
+        print(f"MAE amount: {outcome.mae_amount}")
+        print(
+            "Directional NIFTY move: "
+            + (
+                "N/A"
+                if outcome.directional_spot_change is None
+                else str(outcome.directional_spot_change)
+            )
+        )
+        for minutes, value in outcome.forward_returns:
+            print(
+                f"Forward {minutes}m: "
+                + ("N/A" if value is None else f"{value}%")
+            )
+        return 0
+
     if argv and argv[0] == "prepare-session":
         if len(argv) != 2:
             print("Usage: python -m intrader prepare-session YYYY-MM-DD")
@@ -784,7 +848,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
             "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
-            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM]"
+            "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM]"
         )
         return 2
 

@@ -53,13 +53,17 @@ class FeedHealth:
             return
         previous = self._latest.get(key)
         if previous is not None:
-            if tick.exchange_at < previous.exchange_at:
-                return
-            if (
-                tick.exchange_at == previous.exchange_at
-                and tick.sequence <= previous.sequence
-            ):
-                return
+            if tick.exchange == "NSE":
+                # SmartAPI index feeds can reuse/non-increment sequence values.
+                # Their exchange timestamp is the reliable freshness ordering.
+                if tick.exchange_at <= previous.exchange_at:
+                    return
+            else:
+                # NFO futures/options provide sequence ordering within a
+                # connection. Accept a newer sequence even if its exchange
+                # timestamp is stale so the health snapshot can fail closed.
+                if tick.sequence <= previous.sequence:
+                    return
         self._latest[key] = tick
 
     def snapshot(self, now: datetime) -> HealthSnapshot:

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from intrader.global_news import fetch_global_market_news
+from intrader.global_news import fetch_global_market_news, market_relevance_score
 
 
 class Response:
@@ -37,3 +37,18 @@ def test_global_news_maps_gdelt_articles_to_context_news(monkeypatch) -> None:
     assert items[0].source == "example.test"
     assert items[0].category == "GLOBAL_MARKET_NEWS"
     assert items[0].published_at == datetime(2026, 9, 28, 6, 30, tzinfo=timezone.utc)
+
+
+
+def test_market_relevance_score_rejects_unrelated_local_story() -> None:
+    assert market_relevance_score(
+        "Local council opens a new park after weekend ceremony",
+        "example.test",
+    ) < 3
+
+
+def test_market_relevance_score_prioritizes_macro_market_context() -> None:
+    assert market_relevance_score(
+        "Federal Reserve decision pushes Treasury yields and Nasdaq lower",
+        "reuters.com",
+    ) >= 10

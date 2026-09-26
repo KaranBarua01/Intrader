@@ -8,7 +8,7 @@ from typing import Callable
 
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -16,7 +16,7 @@ from intrader.ui.data_service import DesktopDataService
 from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.theme import APP_STYLESHEET
-from intrader.ui.updater import UpdateError, UpdateService, UpdateStatus
+from intrader.ui.updater import UpdateApplyResult, UpdateError, UpdateService, UpdateStatus
 from intrader.ui.utility_pages import (
     CalibrationPage, DashboardPage, ExportPage, RecordsManagerPage,
     ResearchBrowserPage, ShadowTraderPage, SystemHealthPage, ThesisPage,
@@ -287,15 +287,12 @@ class MainWindow(QMainWindow):
             details = status.summary
             if status.commits:
                 details += "\n\n" + "\n".join(status.commits)
-            if status.mode == "release":
-                response = QMessageBox.question(self, "Intrader Update", details + "\n\nOpen the GitHub release page?")
-                if response == QMessageBox.StandardButton.Yes and status.release_url:
-                    try:
-                        self.updater.open_release(status.release_url)
-                    except UpdateError as exc:
-                        self._show_error(str(exc))
-                return
-            response = QMessageBox.question(self, "Intrader Update", details + "\n\nApply this fast-forward update now? The app must be restarted afterward.")
+            prompt = (
+                details
+                + "\n\nApply this update now? "
+                + ("The app will close and relaunch automatically." if status.mode == "release" else "The app must be restarted afterward.")
+            )
+            response = QMessageBox.question(self, "Intrader Update", prompt)
             if response == QMessageBox.StandardButton.Yes:
                 self._apply_update()
         def failed(message: str) -> None:
@@ -307,10 +304,20 @@ class MainWindow(QMainWindow):
     def _apply_update(self) -> None:
         self.update_button.setEnabled(False)
         self.update_button.setText("Updating…")
-        def done(message: object) -> None:
+        def done(result: UpdateApplyResult) -> None:
             self.update_button.setEnabled(True)
             self.update_button.setText("Update")
-            QMessageBox.information(self, "Intrader Updated", str(message) + "\n\nRestart Intrader to load the updated code.")
+            if result.exit_to_install:
+                QMessageBox.information(self, "Intrader Update", result.message)
+                app = QApplication.instance()
+                if app is not None:
+                    app.quit()
+                return
+            QMessageBox.information(
+                self,
+                "Intrader Updated",
+                result.message + ("\n\nRestart Intrader to load the updated code." if result.restart_required else ""),
+            )
         def failed(message: str) -> None:
             self.update_button.setEnabled(True)
             self.update_button.setText("Update")

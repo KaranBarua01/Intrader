@@ -5,13 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from PySide6.QtCore import QRectF, Qt
+from datetime import datetime
+
+from PySide6.QtCore import QLineF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPicture, QPen
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHeaderView, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser,
+    QToolButton, QVBoxLayout, QWidget,
 )
 import pyqtgraph as pg
+
+from intrader.historical import INDIA_TIME
 
 
 class Card(QFrame):
@@ -28,6 +33,87 @@ class Card(QFrame):
 
     def add_widget(self, widget: QWidget, stretch: int = 0) -> None:
         self.layout_box.addWidget(widget, stretch)
+
+
+class TextPanel(Card):
+    """Readable wrapped prose panel for analysis notes and explanations."""
+
+    def __init__(self, title: str, text: str = "") -> None:
+        super().__init__(title)
+        self.text = QTextBrowser()
+        self.text.setFrameShape(QFrame.Shape.NoFrame)
+        self.text.setOpenExternalLinks(True)
+        self.text.setMinimumHeight(90)
+        self.layout_box.addWidget(self.text)
+        self.set_text(text)
+
+    def set_text(self, text: str | list[str] | tuple[str, ...]) -> None:
+        if isinstance(text, (list, tuple)):
+            values = [str(item) for item in text if str(item).strip()]
+            rendered = "<br><br>".join(values)
+        else:
+            rendered = str(text or "")
+        if not rendered:
+            rendered = "<span style='color:#7b858c'>No analysis available for this selection.</span>"
+        self.text.setHtml(rendered)
+
+
+class CollapsibleSection(Card):
+    """Compact section that gives space back to the workspace when collapsed."""
+
+    def __init__(self, title: str, content: QWidget, *, expanded: bool = False) -> None:
+        super().__init__(None)
+        self.toggle = QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.toggle.clicked.connect(self._toggle)
+        self.content = content
+        self.content.setVisible(expanded)
+        self.layout_box.addWidget(self.toggle)
+        self.layout_box.addWidget(self.content)
+
+    def _toggle(self, checked: bool) -> None:
+        self.toggle.setArrowType(
+            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+        )
+        self.content.setVisible(checked)
+
+
+class ResponsiveMetricGrid(QWidget):
+    """Reflow KPI cards instead of forcing a very wide minimum size."""
+
+    def __init__(self, cards: list[QWidget], *, compact_height: int = 82) -> None:
+        super().__init__()
+        self.cards = list(cards)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(8)
+        self.grid.setVerticalSpacing(8)
+        self._columns = 0
+        for card in self.cards:
+            card.setMinimumHeight(compact_height)
+            card.setMaximumHeight(compact_height + 18)
+        self._reflow(6)
+
+    def resizeEvent(self, event) -> None:
+        width = max(1, event.size().width())
+        columns = 6 if width >= 1120 else 3 if width >= 720 else 2
+        self._reflow(columns)
+        super().resizeEvent(event)
+
+    def _reflow(self, columns: int) -> None:
+        if columns == self._columns:
+            return
+        self._columns = columns
+        while self.grid.count():
+            self.grid.takeAt(0)
+        for index, card in enumerate(self.cards):
+            self.grid.addWidget(card, index // columns, index % columns)
 
 
 class MetricCard(Card):
@@ -123,6 +209,8 @@ class DataTable(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setStretchLastSection(True)
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
 
     def set_rows(self, rows: list[list[object]]) -> None:
         self.setRowCount(len(rows))
@@ -145,20 +233,24 @@ class CandlestickItem(pg.GraphicsObject):
         picture = QPicture()
         painter = QPainter(picture)
         if data:
-            width = 0.32
+            xs = [row[0] for row in data]
+            spacings = [
+                later - earlier
+                for earlier, later in zip(xs, xs[1:])
+                if later > earlier
+            ]
+            width = (min(spacings) * 0.32) if spacings else 18.0
             lows = []
             highs = []
-            xs = []
             for x, open_, close, low, high in data:
                 positive = close >= open_
                 color = QColor("#2d8a60" if positive else "#c64b4b")
                 painter.setPen(QPen(color, 1))
-                painter.drawLine(int(x), int(low), int(x), int(high))
+                painter.drawLine(QLineF(x, low, x, high))
                 top = max(open_, close)
                 bottom = min(open_, close)
                 height = max(top - bottom, 0.01)
                 painter.fillRect(QRectF(x - width, bottom, width * 2, height), color)
-                xs.append(x)
                 lows.append(low)
                 highs.append(high)
             self._bounds = QRectF(
@@ -178,10 +270,31 @@ class CandlestickItem(pg.GraphicsObject):
         return self._bounds
 
 
+class DateAxisItem(pg.AxisItem):
+    """Human-readable India-local timestamps for market charts."""
+
+    def tickStrings(self, values, scale, spacing):
+        labels = []
+        for value in values:
+            try:
+                at = datetime.fromtimestamp(float(value), tz=INDIA_TIME)
+            except (OSError, OverflowError, ValueError):
+                labels.append("")
+                continue
+            labels.append(
+                at.strftime("%d %b\n%H:%M")
+                if spacing >= 3600
+                else at.strftime("%H:%M")
+            )
+        return labels
+
+
 class MarketChart(Card):
     def __init__(self, title: str = "NIFTY CANDLES") -> None:
         super().__init__(title)
-        self.plot = pg.PlotWidget()
+        self.plot = pg.PlotWidget(
+            axisItems={"bottom": DateAxisItem(orientation="bottom")}
+        )
         self.plot.setBackground("#fffefa")
         self.plot.showGrid(x=True, y=True, alpha=0.12)
         self.plot.getAxis("left").setPen("#9aa1a5")

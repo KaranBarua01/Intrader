@@ -1,4 +1,7 @@
 from pathlib import Path
+import zipfile
+
+import pytest
 
 from intrader.ui import updater
 
@@ -18,3 +21,18 @@ def test_development_update_requires_phase4_branch(monkeypatch, tmp_path) -> Non
 
     assert status.available is False
     assert "intrader-phase4" in status.summary
+
+
+
+def test_packaged_update_rejects_zip_path_traversal(tmp_path) -> None:
+    archive = tmp_path / "unsafe.zip"
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("../outside.txt", "unsafe")
+
+    with pytest.raises(updater.UpdateError, match="unsafe path"):
+        updater._safe_extract_zip(archive, staging)
+
+    assert not (tmp_path / "outside.txt").exists()

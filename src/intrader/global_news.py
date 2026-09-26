@@ -12,10 +12,28 @@ from intrader.context import NewsItem
 
 GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 GLOBAL_MARKET_QUERY = (
-    '("Federal Reserve" OR inflation OR "bond yields" OR oil OR crude OR tariffs '
-    'OR sanctions OR "central bank" OR recession OR "stock market" OR "US China" '
-    'OR geopolitics OR currency OR dollar OR "global markets")'
+    '("Federal Reserve" OR FOMC OR CPI OR PPI OR payrolls OR inflation '
+    'OR "Treasury yields" OR "bond yields" OR "S&P 500" OR Nasdaq OR Dow '
+    'OR crude OR oil OR OPEC OR DXY OR USDINR OR dollar OR rupee '
+    'OR tariffs OR sanctions OR "central bank" OR recession OR "stock market" '
+    'OR "global markets" OR RBI OR ECB OR BOJ OR China OR geopolitics)'
 )
+
+_MARKET_TERMS = {
+    "federal reserve": 5, "fomc": 5, "cpi": 5, "ppi": 4, "payroll": 5,
+    "jobs report": 4, "inflation": 4, "treasury": 4, "bond yield": 4,
+    "yield": 2, "s&p 500": 4, "nasdaq": 4, "dow": 3, "stock market": 3,
+    "global market": 3, "crude": 4, "oil": 3, "opec": 4, "dxy": 5,
+    "usdinr": 5, "dollar": 2, "rupee": 3, "currency": 2, "rbi": 5,
+    "reserve bank of india": 5, "ecb": 4, "european central bank": 4,
+    "boj": 4, "bank of japan": 4, "tariff": 3, "sanction": 3,
+    "recession": 3, "china": 2, "geopolit": 2, "war": 1,
+}
+_TRUSTED_MARKET_DOMAINS = {
+    "reuters.com", "bloomberg.com", "cnbc.com", "ft.com", "wsj.com",
+    "marketwatch.com", "investing.com", "moneycontrol.com",
+    "economictimes.indiatimes.com", "business-standard.com", "livemint.com",
+}
 
 
 class GlobalNewsError(Exception):
@@ -36,6 +54,23 @@ def _parse_seen(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def market_relevance_score(title: str, domain: str = "") -> int:
+    """Return a conservative headline relevance score for market context."""
+
+    text = " ".join(title.lower().split())
+    score = sum(weight for term, weight in _MARKET_TERMS.items() if term in text)
+    clean_domain = domain.lower().removeprefix("www.")
+    if clean_domain in _TRUSTED_MARKET_DOMAINS:
+        score += 2
+    return score
+
+
+def _normalized_title(title: str) -> str:
+    return " ".join(
+        "".join(ch.lower() if ch.isalnum() else " " for ch in title).split()
+    )
 
 
 def fetch_global_market_news(
@@ -78,6 +113,7 @@ def fetch_global_market_news(
 
     items: list[NewsItem] = []
     seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
     for article in articles:
         if not isinstance(article, dict):
             continue
@@ -85,9 +121,18 @@ def fetch_global_market_news(
         url = str(article.get("url") or "").strip()
         published = _parse_seen(article.get("seendate"))
         domain = str(article.get("domain") or "GDELT").strip()
-        if not title or not url or published is None or url in seen_urls:
+        normalized = _normalized_title(title)
+        if (
+            not title
+            or not url
+            or published is None
+            or url in seen_urls
+            or normalized in seen_titles
+            or market_relevance_score(title, domain) < 3
+        ):
             continue
         seen_urls.add(url)
+        seen_titles.add(normalized)
         items.append(
             NewsItem(
                 source=domain or "GDELT",

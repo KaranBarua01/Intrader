@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from PySide6.QtCore import QUrl, Signal, Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter,
+    QVBoxLayout, QWidget,
 )
 
 from intrader.ui.components import (
@@ -344,17 +345,18 @@ class SystemHealthPage(QWidget):
         title_row.addWidget(note)
         root.addLayout(title_row)
 
-        self.pills_layout = QHBoxLayout()
+        self.pills_layout = QGridLayout()
+        self.pills_layout.setHorizontalSpacing(8)
+        self.pills_layout.setVerticalSpacing(8)
         self.pills = {}
-        for name in (
+        for index, name in enumerate((
             "Database", "Candles", "Options", "Futures", "VIX / Index",
             "Breadth", "Order Flow", "News", "Events", "Decisions",
             "Outcomes", "Audits",
-        ):
+        )):
             pill = StatusPill(name, None)
             self.pills[name] = pill
-            self.pills_layout.addWidget(pill)
-        self.pills_layout.addStretch(1)
+            self.pills_layout.addWidget(pill, index // 4, index % 4)
         root.addLayout(self.pills_layout)
 
         self.table = DataTable(["Storage / Context", "Rows", "State"])

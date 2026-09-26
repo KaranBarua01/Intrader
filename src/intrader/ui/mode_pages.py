@@ -312,6 +312,12 @@ class TimeTravelPage(QWidget):
         range_middle.addLayout(scenario, 2)
         range_root.addLayout(range_middle, 1)
 
+        self.range_notes = DataTable(["WHAT HAPPENED / EVIDENCE AROUND WHY"])
+        notes_card = Card("PERIOD ANALYSIS")
+        notes_card.add_widget(self.range_notes)
+        self.range_notes.setMaximumHeight(150)
+        range_root.addWidget(notes_card)
+
         range_bottom = QHBoxLayout()
         self.key_moments = DataTable(
             ["Time", "Type", "Importance", "Summary", "Detail"]
@@ -496,6 +502,10 @@ class TimeTravelPage(QWidget):
         evidence_rows = [[driver] for driver in opening.drivers]
         evidence_rows.extend([[f"LIMITATION: {item}"] for item in opening.limitations])
         self.opening_drivers.set_rows(evidence_rows)
+
+        self.range_notes.set_rows([
+            [note] for note in analysis.analysis_notes
+        ])
 
         self._key_moments = analysis.key_moments
         self.key_moments.set_rows([

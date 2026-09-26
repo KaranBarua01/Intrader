@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class StorageError(Exception):
@@ -236,6 +236,37 @@ class SQLiteStore:
                 BEFORE DELETE ON decision_reasons
                 BEGIN
                     SELECT RAISE(ABORT, 'decision reasons are immutable');
+                END;
+
+                CREATE TABLE IF NOT EXISTS shadow_trades (
+                    trade_id TEXT PRIMARY KEY,
+                    decision_id TEXT NOT NULL UNIQUE,
+                    shadow_version TEXT NOT NULL,
+                    opened_at_utc TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('BUY_CALL', 'BUY_PUT')),
+                    token TEXT NOT NULL,
+                    strike REAL NOT NULL,
+                    option_type TEXT NOT NULL CHECK(option_type IN ('CE', 'PE')),
+                    entry_price REAL NOT NULL CHECK(entry_price > 0),
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    lot_size INTEGER NOT NULL CHECK(lot_size > 0),
+                    lots INTEGER NOT NULL CHECK(lots > 0),
+                    stop_price REAL NOT NULL CHECK(stop_price > 0),
+                    target_price REAL NOT NULL CHECK(target_price > 0),
+                    max_minutes INTEGER NOT NULL CHECK(max_minutes > 0),
+                    FOREIGN KEY (decision_id) REFERENCES decision_records(decision_id)
+                );
+
+                CREATE TRIGGER IF NOT EXISTS shadow_trades_no_update
+                BEFORE UPDATE ON shadow_trades
+                BEGIN
+                    SELECT RAISE(ABORT, 'shadow trades are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS shadow_trades_no_delete
+                BEFORE DELETE ON shadow_trades
+                BEGIN
+                    SELECT RAISE(ABORT, 'shadow trades are immutable');
                 END;
                 """
             )
@@ -927,6 +958,96 @@ class SQLiteStore:
             reasons=reasons,
         )
 
+    def store_shadow_trade(self, trade) -> bool:
+        """Insert one immutable simulated entry plan."""
+
+        try:
+            existing = self._connection.execute(
+                "SELECT 1 FROM shadow_trades WHERE trade_id = ? OR decision_id = ?",
+                (trade.trade_id, trade.decision_id),
+            ).fetchone()
+            if existing is not None:
+                return False
+            with self._connection:
+                self._connection.execute(
+                    """
+                    INSERT INTO shadow_trades (
+                        trade_id, decision_id, shadow_version, opened_at_utc,
+                        action, token, strike, option_type, entry_price,
+                        quantity, lot_size, lots, stop_price, target_price,
+                        max_minutes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        trade.trade_id,
+                        trade.decision_id,
+                        trade.shadow_version,
+                        _utc_iso(trade.opened_at),
+                        trade.action,
+                        trade.token,
+                        float(trade.strike),
+                        trade.option_type,
+                        float(trade.entry_price),
+                        trade.quantity,
+                        trade.lot_size,
+                        trade.lots,
+                        float(trade.stop_price),
+                        float(trade.target_price),
+                        trade.max_minutes,
+                    ),
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite shadow trade write failed") from None
+        return True
+
+    def load_shadow_trade(self, trade_id: str):
+        try:
+            row = self._connection.execute(
+                """
+                SELECT trade_id, decision_id, shadow_version, opened_at_utc,
+                       action, token, strike, option_type, entry_price,
+                       quantity, lot_size, lots, stop_price, target_price,
+                       max_minutes
+                FROM shadow_trades
+                WHERE trade_id = ?
+                """,
+                (trade_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            raise StorageError("SQLite shadow trade read failed") from None
+        if row is None:
+            return None
+
+        from intrader.shadow import ShadowTrade
+
+        return ShadowTrade(
+            trade_id=str(row[0]),
+            decision_id=str(row[1]),
+            shadow_version=str(row[2]),
+            opened_at=datetime.fromisoformat(row[3]),
+            action=str(row[4]),
+            token=str(row[5]),
+            strike=Decimal(str(row[6])),
+            option_type=str(row[7]),
+            entry_price=Decimal(str(row[8])),
+            quantity=int(row[9]),
+            lot_size=int(row[10]),
+            lots=int(row[11]),
+            stop_price=Decimal(str(row[12])),
+            target_price=Decimal(str(row[13])),
+            max_minutes=int(row[14]),
+        )
+
+    def load_shadow_trade_for_decision(self, decision_id: str):
+        try:
+            row = self._connection.execute(
+                "SELECT trade_id FROM shadow_trades WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            raise StorageError("SQLite shadow trade read failed") from None
+        return None if row is None else self.load_shadow_trade(str(row[0]))
+
     def store_candles(
         self, instrument: Instrument, interval: str, candles: Sequence["Candle"]
     ) -> int:
@@ -1183,7 +1304,7 @@ class SQLiteStore:
             "candles", "oi_observations", "option_snapshots",
             "index_snapshots", "future_snapshots", "breadth_snapshots",
             "news_items", "scheduled_events", "decision_records",
-            "decision_families", "decision_reasons",
+            "decision_families", "decision_reasons", "shadow_trades",
         }:
             raise ValueError("unsupported table")
         return int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

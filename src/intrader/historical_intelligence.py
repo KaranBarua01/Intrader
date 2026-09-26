@@ -105,6 +105,8 @@ def analyze_historical_range(
     events: Sequence[ScheduledEvent],
     start: datetime,
     end: datetime,
+    *,
+    coverage_counts: dict[str, int] | None = None,
 ) -> RangeAnalysisSnapshot:
     """Summarize a historical window of at most 30 days without causal overclaiming."""
 
@@ -251,13 +253,38 @@ def analyze_historical_range(
             f"Highest-ranked moment: {key_moments[0].kind} at {key_moments[0].at.astimezone(INDIA_TIME):%Y-%m-%d %H:%M} — {key_moments[0].summary}."
         )
 
-    coverage = (
-        ("Candles", "AVAILABLE" if candles_in else "UNAVAILABLE"),
-        ("Recorded decisions", "AVAILABLE" if decisions_in else "UNAVAILABLE"),
-        ("Shadow outcomes", "AVAILABLE" if bundles_in else "UNAVAILABLE"),
-        ("Global/news context", "AVAILABLE" if news_in else "UNAVAILABLE"),
-        ("Scheduled events", "AVAILABLE" if events_in else "UNAVAILABLE"),
-    )
+    default_counts = {
+        "Candles": len(candles_in),
+        "Options": 0,
+        "Futures": 0,
+        "VIX / Index": 0,
+        "Breadth": 0,
+        "Order flow": 0,
+        "Recorded decisions": len(decisions_in),
+        "Shadow outcomes": len(bundles_in),
+        "Global/news context": len(news_in),
+        "Scheduled events": len(events_in),
+    }
+    if coverage_counts:
+        default_counts.update(coverage_counts)
+
+    coverage_rows: list[tuple[str, str]] = []
+    for family in (
+        "Candles",
+        "Options",
+        "Futures",
+        "VIX / Index",
+        "Breadth",
+        "Order flow",
+        "Recorded decisions",
+        "Shadow outcomes",
+        "Global/news context",
+        "Scheduled events",
+    ):
+        count = int(default_counts.get(family, 0))
+        status = "UNAVAILABLE" if count <= 0 else f"AVAILABLE • {count:,}"
+        coverage_rows.append((family, status))
+    coverage = tuple(coverage_rows)
 
     return RangeAnalysisSnapshot(
         start=start,

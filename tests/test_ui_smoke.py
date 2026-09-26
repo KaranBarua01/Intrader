@@ -147,3 +147,16 @@ def test_strategy_lab_has_explicit_fetch_missing_control() -> None:
     page = StrategyLabPage()
 
     assert page.fetch_button.text() == "Fetch Missing"
+
+
+
+def test_time_travel_marks_results_stale_when_inputs_change() -> None:
+    from PySide6.QtCore import QDate
+
+    app = QApplication.instance() or QApplication([])
+    page = TimeTravelPage()
+    page.range_state.setText("Analyzed")
+    page.range_from_day.setDate(QDate(2026, 9, 20))
+    app.processEvents()
+
+    assert "Analyze Period to refresh" in page.range_state.text()

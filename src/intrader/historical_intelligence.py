@@ -256,18 +256,22 @@ def build_opening_possibilities(
 
     if as_of.tzinfo is None:
         raise HistoricalIntelligenceError("opening analysis timestamp must be timezone aware")
-    if as_of < analysis.end:
-        raise HistoricalIntelligenceError("opening analysis cannot precede the reference range")
-
-    latest_decision = None
-    eligible_decisions = [d for d in decisions if d.decided_at <= analysis.end]
-    if eligible_decisions:
-        latest_decision = max(eligible_decisions, key=lambda d: d.decided_at)
-
     candles_in = tuple(sorted(
         (c for c in candles if analysis.start <= c.at.astimezone(analysis.start.tzinfo) <= analysis.end),
         key=lambda c: c.at,
     ))
+    reference_end = (
+        candles_in[-1].at.astimezone(analysis.end.tzinfo)
+        if candles_in
+        else analysis.end
+    )
+    if as_of < reference_end:
+        raise HistoricalIntelligenceError("opening analysis cannot precede the reference market close")
+
+    latest_decision = None
+    eligible_decisions = [d for d in decisions if d.decided_at <= reference_end]
+    if eligible_decisions:
+        latest_decision = max(eligible_decisions, key=lambda d: d.decided_at)
 
     weighted_votes: list[tuple[str, Decimal, Decimal]] = []
     drivers: list[str] = []
@@ -319,11 +323,11 @@ def build_opening_possibilities(
 
     high_events = [
         event for event in upcoming_events
-        if event.impact == "HIGH" and analysis.end <= event.scheduled_at <= as_of + timedelta(hours=24)
+        if event.impact == "HIGH" and reference_end <= event.scheduled_at <= as_of + timedelta(hours=24)
     ]
     usable_news = [
         item for item in post_close_news
-        if analysis.end < item.published_at <= as_of
+        if reference_end < item.published_at <= as_of
     ]
     gap_risk = Decimal(0)
     if analysis.range_pct is not None:
@@ -353,8 +357,8 @@ def build_opening_possibilities(
 
     return OpeningPossibilities(
         as_of=as_of,
-        reference_end=analysis.end,
-        next_session_candidate=_next_weekday(analysis.end.astimezone(INDIA_TIME).date()),
+        reference_end=reference_end,
+        next_session_candidate=_next_weekday(reference_end.astimezone(INDIA_TIME).date()),
         bullish_weight=bullish,
         balanced_weight=balanced,
         bearish_weight=bearish,

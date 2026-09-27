@@ -32,6 +32,7 @@ TIMEFRAME_MINUTES = {
     "15m": 15,
     "30m": 30,
     "1H": 60,
+    "1D": 375,
 }
 
 
@@ -648,6 +649,7 @@ class CandlestickItem(pg.GraphicsObject):
     def set_data(self, data: list[tuple[float, float, float, float, float]]) -> None:
         picture = QPicture()
         painter = QPainter(picture)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if data:
             xs = [row[0] for row in data]
             spacings = [
@@ -655,22 +657,40 @@ class CandlestickItem(pg.GraphicsObject):
                 for earlier, later in zip(xs, xs[1:])
                 if later > earlier
             ]
-            width = (min(spacings) * 0.32) if spacings else 18.0
+            half_width = (min(spacings) * 0.38) if spacings else 22.0
             lows = []
             highs = []
             for x, open_, close, low, high in data:
                 positive = close >= open_
-                color = QColor(BULLISH_COLOR if positive else BEARISH_COLOR)
-                painter.setPen(QPen(color, 1))
+                fill = QColor(BULLISH_COLOR if positive else BEARISH_COLOR)
+                fill.setAlpha(232)
+                edge = QColor(BULLISH_COLOR if positive else BEARISH_COLOR).darker(118)
+
+                painter.setPen(QPen(edge, 1.45))
                 painter.drawLine(QLineF(x, low, x, high))
+
                 top = max(open_, close)
                 bottom = min(open_, close)
-                height = max(top - bottom, 0.01)
-                painter.fillRect(QRectF(x - width, bottom, width * 2, height), color)
+                # A tiny visual floor keeps doji / near-doji candles readable.
+                height = max(top - bottom, 0.06)
+                body = QRectF(
+                    x - half_width,
+                    bottom,
+                    half_width * 2,
+                    height,
+                )
+                painter.fillRect(body, fill)
+                painter.setPen(QPen(edge, 1.15))
+                painter.drawRect(body)
+
                 lows.append(low)
                 highs.append(high)
+            x_pad = (min(spacings) * 0.55) if spacings else 30.0
             self._bounds = QRectF(
-                min(xs) - 1, min(lows), (max(xs) - min(xs)) + 2, max(highs) - min(lows)
+                min(xs) - x_pad,
+                min(lows),
+                (max(xs) - min(xs)) + (x_pad * 2),
+                max(highs) - min(lows),
             )
         else:
             self._bounds = QRectF()
@@ -705,6 +725,21 @@ class DateAxisItem(pg.AxisItem):
         return labels
 
 
+class PriceAxisItem(pg.AxisItem):
+    """Readable price labels that do not collapse into duplicate rounded ticks."""
+
+    def tickStrings(self, values, scale, spacing):
+        if spacing >= 10:
+            digits = 0
+        elif spacing >= 1:
+            digits = 1
+        elif spacing >= 0.1:
+            digits = 2
+        else:
+            digits = 3
+        return [f"{float(value):,.{digits}f}" for value in values]
+
+
 class MarketChart(Card):
     """Candlestick chart with built-in candle-size selector."""
 
@@ -735,7 +770,7 @@ class MarketChart(Card):
         self.timeframe_group.setExclusive(True)
         self.timeframe_buttons: dict[str, QPushButton] = {}
         if show_timeframes:
-            for label in ("1m", "3m", "5m", "15m", "30m", "1H", "Auto"):
+            for label in ("1m", "3m", "5m", "15m", "30m", "1H", "1D", "Auto"):
                 button = QPushButton(label)
                 button.setObjectName("TimeframeButton")
                 button.setCheckable(True)
@@ -754,13 +789,18 @@ class MarketChart(Card):
         self.layout_box.insertLayout(0, header)
 
         self.plot = pg.PlotWidget(
-            axisItems={"bottom": DateAxisItem(orientation="bottom")}
+            axisItems={
+                "bottom": DateAxisItem(orientation="bottom"),
+                "left": PriceAxisItem(orientation="left"),
+            }
         )
         self.plot.setBackground("#FEFDFB")
         self.plot.showGrid(x=True, y=True, alpha=0.06)
         self.plot.getAxis("left").setPen("#9aa1a5")
         self.plot.getAxis("bottom").setPen("#9aa1a5")
         self.plot.setMouseEnabled(x=True, y=True)
+        self.plot.getViewBox().setLimits(minYRange=5.0)
+        self.plot.getViewBox().setMouseMode(pg.ViewBox.RectMode)
         self.candles = CandlestickItem()
         self.plot.addItem(self.candles)
         self.layout_box.addWidget(self.plot)
@@ -809,7 +849,9 @@ class MarketChart(Card):
             return 15
         if span <= timedelta(days=10):
             return 30
-        return 60
+        if span <= timedelta(days=15):
+            return 60
+        return 375
 
     def _render_raw_candles(self) -> None:
         minutes = (
@@ -837,6 +879,26 @@ class MarketChart(Card):
                 )
                 for c in candles
             ]
+        if minutes >= 375:
+            by_day: dict[object, list] = {}
+            for candle in candles:
+                key = candle.at.astimezone(INDIA_TIME).date()
+                by_day.setdefault(key, []).append(candle)
+            rows = []
+            for day in sorted(by_day):
+                bucket = sorted(by_day[day], key=lambda item: item.at)
+                first = bucket[0]
+                last = bucket[-1]
+                rows.append(
+                    (
+                        first.at.timestamp(),
+                        float(first.open),
+                        float(last.close),
+                        float(min(c.low for c in bucket)),
+                        float(max(c.high for c in bucket)),
+                    )
+                )
+            return rows
         buckets: list[list] = []
         current_key = None
         current: list = []
@@ -880,12 +942,36 @@ class MarketChart(Card):
         self.plot.clear()
         self.plot.showAxis("left")
         self.plot.showAxis("bottom")
-        self.plot.showGrid(x=True, y=True, alpha=0.08)
+        self.plot.showGrid(x=True, y=True, alpha=0.055)
         self.plot.setMouseEnabled(x=True, y=True)
         self.candles.set_data(rows)
         self.plot.addItem(self.candles)
         if rows:
-            self.plot.enableAutoRange()
+            lows = [row[3] for row in rows]
+            highs = [row[4] for row in rows]
+            raw_low = min(lows)
+            raw_high = max(highs)
+            data_span = max(raw_high - raw_low, 0.01)
+            visible_span = max(5.0, data_span * 1.12)
+            center = (raw_high + raw_low) / 2.0
+            self.plot.setYRange(
+                center - visible_span / 2.0,
+                center + visible_span / 2.0,
+                padding=0,
+            )
+
+            xs = [row[0] for row in rows]
+            spacings = [
+                later - earlier
+                for earlier, later in zip(xs, xs[1:])
+                if later > earlier
+            ]
+            x_pad = (min(spacings) * 0.65) if spacings else 60.0
+            self.plot.setXRange(
+                min(xs) - x_pad,
+                max(xs) + x_pad,
+                padding=0,
+            )
 
     def set_empty_message(self, message: str) -> None:
         self._raw_candles = ()

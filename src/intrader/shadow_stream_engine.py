@@ -522,8 +522,14 @@ class CausalFrozenEngine:
 
     def _gate(self, direction: int, snapshot: FeatureSnapshot) -> str | None:
         if (
-            "News / regime / time" in self.spec.enabled_families
-            and snapshot.high_impact_event_active
+            snapshot.high_impact_event_active
+            and any(
+                family in self.spec.enabled_families
+                for family in (
+                    "Volatility / macro context",
+                    "News / regime / time",
+                )
+            )
         ):
             return "high-impact event risk window"
         directional = [score * D(direction) for _family, score in snapshot.scores]

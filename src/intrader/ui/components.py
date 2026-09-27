@@ -11,8 +11,8 @@ from PySide6.QtCore import QLineF, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPicture, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGridLayout,
-    QHeaderView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QToolButton,
+    QHeaderView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QProgressBar,
+    QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QToolButton,
     QVBoxLayout, QWidget,
 )
 import pyqtgraph as pg

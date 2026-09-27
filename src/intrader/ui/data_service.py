@@ -291,18 +291,44 @@ class DesktopDataService:
         start_day = end_day - timedelta(days=sessions * 2 + 35)
         start = datetime.combine(start_day, time(9, 15), INDIA_TIME)
 
+        def collect_cached(
+            target: dict[datetime, Candle],
+            *,
+            backfill_missing: bool,
+        ) -> None:
+            cursor = start
+            while cursor < end:
+                chunk_end = min(cursor + timedelta(days=27), end)
+                rows = self.load_nifty_candle_range(
+                    cursor,
+                    chunk_end,
+                    backfill_missing=backfill_missing,
+                )
+                for candle in rows:
+                    target[candle.at] = candle
+                cursor = chunk_end
+
+        # Always try the local cache first. Historical replay should keep working
+        # without internet or a fresh broker login when enough candles are already
+        # stored on disk.
         merged: dict[datetime, Candle] = {}
-        cursor = start
-        while cursor < end:
-            chunk_end = min(cursor + timedelta(days=27), end)
-            rows = self.load_nifty_candle_range(
-                cursor,
-                chunk_end,
-                backfill_missing=True,
-            )
-            for candle in rows:
-                merged[candle.at] = candle
-            cursor = chunk_end
+        collect_cached(merged, backfill_missing=False)
+        cached_session_dates = {
+            candle.at.astimezone(INDIA_TIME).date()
+            for candle in merged.values()
+        }
+        if len(cached_session_dates) >= sessions:
+            return tuple(sorted(merged.values(), key=lambda item: item.at))
+
+        cached_count = len(cached_session_dates)
+        try:
+            collect_cached(merged, backfill_missing=True)
+        except Exception as exc:
+            detail = str(exc).strip() or exc.__class__.__name__
+            raise ValueError(
+                f"Shadow Trader has {cached_count}/{sessions} requested sessions cached locally. "
+                f"SmartAPI could not download the missing historical candles: {detail}"
+            ) from None
 
         ordered = tuple(sorted(merged.values(), key=lambda item: item.at))
         session_dates = {
@@ -311,8 +337,8 @@ class DesktopDataService:
         }
         if len(session_dates) < sessions:
             raise ValueError(
-                f"only {len(session_dates)} historical NIFTY sessions are available; "
-                f"{sessions} were requested"
+                f"only {len(session_dates)} historical NIFTY sessions are available after "
+                f"SmartAPI backfill; {sessions} were requested"
             )
         return ordered
 

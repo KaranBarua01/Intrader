@@ -78,6 +78,7 @@ def export_shadow_review_bundle(
     *,
     sessions: int,
     mode_key: str,
+    replay_report=None,
 ) -> Path:
     """Export one self-contained Shadow Trader review bundle for diagnosis."""
 
@@ -108,6 +109,9 @@ def export_shadow_review_bundle(
                 "decision engine may only read observations with timestamp <= simulated clock"
             ),
         },
+        "historical_replay_report": (
+            None if replay_report is None else asdict(replay_report)
+        ),
         "performance": performance_payload,
         "decision_records": [asdict(decision) for decision in decisions],
         "completed_shadow_trades": [

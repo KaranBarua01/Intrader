@@ -36,9 +36,18 @@ TIMEFRAME_MINUTES = {
 class LogoMark(QWidget):
     """Vector Intrader mark inspired by the approved geometric N/candlestick logo."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        accent: str = DEFAULT_ACCENT,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._accent = accent
         self.setFixedSize(52, 52)
+
+    def set_accent(self, accent: str) -> None:
+        self._accent = accent
+        self.update()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -51,7 +60,7 @@ class LogoMark(QWidget):
         painter.drawEllipse(QPointF(cx, cy), 22, 22)
 
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#D85C5C"))
+        painter.setBrush(QColor(self._accent))
         painter.drawRect(QRectF(5, cy - 4, 42, 8))
 
         painter.setPen(QPen(QColor("#111318"), 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
@@ -67,12 +76,17 @@ class LogoMark(QWidget):
 class BrandLockup(QWidget):
     """Top-left Intrader brand lockup used across all workstation modes."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        accent: str = DEFAULT_ACCENT,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        layout.addWidget(LogoMark())
+        self.mark = LogoMark(accent)
+        layout.addWidget(self.mark)
         text = QWidget()
         text_layout = QVBoxLayout(text)
         text_layout.setContentsMargins(0, 4, 0, 3)
@@ -528,6 +542,65 @@ class ReasonList(Card):
             item = QListWidgetItem(f"{code}\n{explanation}")
             item.setToolTip(explanation)
             self.list.addItem(item)
+
+
+class MixBars(QWidget):
+    """Compact decision/regime distribution used in Time Travel."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(2, 2, 2, 2)
+        self._layout.setSpacing(7)
+
+    def _clear(self) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def set_rows(self, rows: list[list[object]]) -> None:
+        self._clear()
+        clean = [(str(row[0]), int(row[1])) for row in rows if len(row) >= 2 and str(row[1]).lstrip("-").isdigit()]
+        total = max(1, sum(max(0, count) for _name, count in clean))
+        if not clean:
+            label = QLabel("No distribution data.")
+            label.setObjectName("Muted")
+            self._layout.addWidget(label)
+            self._layout.addStretch(1)
+            return
+        for name, count in clean[:6]:
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(7)
+            name_label = QLabel(name)
+            name_label.setMinimumWidth(86)
+            name_label.setObjectName("Muted")
+            value = QLabel(str(count))
+            value.setMinimumWidth(28)
+            bar = QProgressBar()
+            bar.setRange(0, total)
+            bar.setValue(max(0, count))
+            bar.setTextVisible(False)
+            lowered = name.lower()
+            if any(token in lowered for token in ("call", "buy", "bull", "up")):
+                color = BULLISH_COLOR
+            elif any(token in lowered for token in ("put", "sell", "bear", "down")):
+                color = BEARISH_COLOR
+            else:
+                color = "#7A8288"
+            bar.setStyleSheet(
+                "QProgressBar{background:#ECE9E3;border:none;border-radius:4px;"
+                "min-height:7px;max-height:7px;}"
+                f"QProgressBar::chunk{{background:{color};border-radius:4px;}}"
+            )
+            row_layout.addWidget(name_label)
+            row_layout.addWidget(value)
+            row_layout.addWidget(bar, 1)
+            self._layout.addWidget(row_widget)
+        self._layout.addStretch(1)
 
 
 class DataTable(QTableWidget):

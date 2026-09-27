@@ -9,17 +9,17 @@ from typing import Callable
 from PySide6.QtCore import QDate, QSettings, QThread, QTime, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QGraphicsDropShadowEffect,
+    QApplication, QFileDialog, QFrame, QGraphicsDropShadowEffect,
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
     QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from intrader.ui.components import TriangleDockButton
+from intrader.ui.components import AccentSelector, BrandLockup, DotMatrix, TriangleDockButton
 from intrader.ui.data_service import DesktopDataService
 from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.strategy_lab_page import StrategyLabPage
-from intrader.ui.theme import THEMES, build_stylesheet
+from intrader.ui.theme import ACCENT_PRESETS, DEFAULT_ACCENT, build_stylesheet
 from intrader.ui.updater import UpdateApplyResult, UpdateError, UpdateService, UpdateStatus
 from intrader.ui.utility_pages import (
     CalibrationPage, DashboardPage, ExportPage, RecordsManagerPage,
@@ -53,10 +53,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Intrader")
         self.resize(1540, 940)
         self.setMinimumSize(900, 620)
-        self.current_theme = str(self.settings.value("theme", "Sand"))
-        if self.current_theme not in THEMES:
-            self.current_theme = "Sand"
-        self.setStyleSheet(build_stylesheet(self.current_theme))
+        self.current_accent = str(
+            self.settings.value("accent", DEFAULT_ACCENT)
+        )
+        valid_accents = {color for _name, color in ACCENT_PRESETS}
+        if self.current_accent not in valid_accents:
+            self.current_accent = DEFAULT_ACCENT
+        self.setStyleSheet(build_stylesheet(self.current_accent))
         self.service = DesktopDataService()
         self.updater = UpdateService()
         self._workers: set[TaskThread] = set()
@@ -78,41 +81,25 @@ class MainWindow(QMainWindow):
 
         top = QFrame()
         top.setObjectName("TopBar")
-        top.setFixedHeight(48)
+        top.setFixedHeight(72)
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(12, 6, 12, 6)
-        top_layout.setSpacing(8)
+        top_layout.setContentsMargins(16, 8, 16, 8)
+        top_layout.setSpacing(10)
 
-        logo = QLabel("INTRADER")
-        logo.setObjectName("AppTitle")
-        top_layout.addWidget(logo)
-        subtitle = QLabel("Market Intelligence")
-        subtitle.setObjectName("Muted")
-        top_layout.addWidget(subtitle)
+        self.brand = BrandLockup()
+        top_layout.addWidget(self.brand)
         top_layout.addStretch(1)
 
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItems(["Balanced", "Compact", "Analysis", "Monitoring"])
-        self.layout_combo.setToolTip("Workspace density / arrangement")
-        self.layout_combo.setCurrentText(
-            str(self.settings.value("layout_preset", "Balanced"))
-        )
-        self.layout_combo.currentTextChanged.connect(self.apply_layout_preset)
-        top_layout.addWidget(self.layout_combo)
+        self.accent_selector = AccentSelector(self.current_accent)
+        self.accent_selector.accent_changed.connect(self.apply_accent)
+        top_layout.addWidget(self.accent_selector)
 
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(list(THEMES))
-        self.theme_combo.setCurrentText(self.current_theme)
-        self.theme_combo.setToolTip("Minimalist appearance")
-        self.theme_combo.currentTextChanged.connect(self.apply_theme)
-        top_layout.addWidget(self.theme_combo)
-
-        self.refresh_button = QPushButton("Refresh Data")
-        self.refresh_button.setObjectName("PrimaryButton")
+        self.refresh_button = QPushButton("↻  Refresh Data")
+        self.refresh_button.setObjectName("SecondaryButton")
         self.refresh_button.clicked.connect(self.refresh_all)
         top_layout.addWidget(self.refresh_button)
 
-        self.update_button = QPushButton("Update")
+        self.update_button = QPushButton("↓  Update")
         self.update_button.setObjectName("PrimaryButton")
         self.update_button.clicked.connect(self.check_updates)
         top_layout.addWidget(self.update_button)
@@ -239,7 +226,6 @@ class MainWindow(QMainWindow):
         self.export_page.audit_export_requested.connect(self.export_audits)
 
         self.show_page("Intrader Mode")
-        self.apply_layout_preset(self.layout_combo.currentText())
         self._position_bottom_navigation()
 
     def resizeEvent(self, event) -> None:
@@ -252,12 +238,10 @@ class MainWindow(QMainWindow):
             return
         width = central.width()
         height = central.height()
-        dock_width = min(max(680, int(width * 0.72)), max(680, width - 24))
-        if width < 760:
-            dock_width = max(520, width - 16)
-        dock_height = 60
+        dock_width = max(520, width - 24)
+        dock_height = 54
         dock_x = max(8, (width - dock_width) // 2)
-        dock_y = max(48, height - dock_height - 12)
+        dock_y = max(72, height - dock_height - 8)
         self.bottom_dock.setGeometry(dock_x, dock_y, dock_width, dock_height)
         handle_width = self.dock_handle.width()
         handle_height = self.dock_handle.height()
@@ -281,15 +265,17 @@ class MainWindow(QMainWindow):
         self.dock_handle.set_dock_open(self._dock_visible)
         self._position_bottom_navigation()
 
-    def apply_theme(self, name: str) -> None:
-        if name not in THEMES:
-            return
-        self.current_theme = name
-        self.setStyleSheet(build_stylesheet(name))
-        self.settings.setValue("theme", name)
+    def apply_accent(self, accent: str) -> None:
+        valid = {color for _name, color in ACCENT_PRESETS}
+        if accent not in valid:
+            accent = DEFAULT_ACCENT
+        self.current_accent = accent
+        self.setStyleSheet(build_stylesheet(accent))
+        self.settings.setValue("accent", accent)
+        for dots in self.findChildren(DotMatrix):
+            dots.set_accent(accent)
 
-    def apply_layout_preset(self, preset: str) -> None:
-        self.settings.setValue("layout_preset", preset)
+    def apply_layout_preset(self, preset: str = "Compact") -> None:
         current = self.stack.currentWidget()
         page = None
         for name, wrapper in self._pages.items():
@@ -297,7 +283,7 @@ class MainWindow(QMainWindow):
                 page = self._page_widgets.get(name)
                 break
         if page is not None and hasattr(page, "apply_layout_preset"):
-            page.apply_layout_preset(preset)
+            page.apply_layout_preset("Compact")
 
     def _run_task(self, task: Callable[[], object], success: Callable[[object], None], failure: Callable[[str], None] | None = None) -> None:
         worker = TaskThread(task)
@@ -318,7 +304,7 @@ class MainWindow(QMainWindow):
         self.more_button.setText("More" if name in primary_names else f"More • {name}")
         page = self._page_widgets[name]
         if hasattr(page, "apply_layout_preset"):
-            page.apply_layout_preset(self.layout_combo.currentText())
+            page.apply_layout_preset("Compact")
         if self._dock_visible:
             self.toggle_bottom_dock()
 
@@ -664,8 +650,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.settings.setValue("geometry", self.saveGeometry())
-        self.settings.setValue("theme", self.current_theme)
-        self.settings.setValue("layout_preset", self.layout_combo.currentText())
+        self.settings.setValue("accent", self.current_accent)
         super().closeEvent(event)
 
     def _show_error(self, message: str) -> None:

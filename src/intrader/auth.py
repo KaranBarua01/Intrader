@@ -138,6 +138,8 @@ def authenticate(
     }
     try:
         response = transport.post_json(LOGIN_URL, headers, body, timeout=10)
+    except SmartAPIError:
+        raise
     except Exception:
         raise SmartAPIError("SmartAPI login unavailable") from None
 

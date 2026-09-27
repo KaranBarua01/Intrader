@@ -718,6 +718,7 @@ class MainWindow(QMainWindow):
 
         def done(report) -> None:
             self._latest_shadow_replay_report = report
+            self.shadow_page.set_replay_report(report)
             blind = report.blind
             win_rate = (
                 "N/A"

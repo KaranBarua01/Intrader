@@ -265,6 +265,20 @@ class ShadowReplayConfig:
     def total_sessions(self) -> int:
         return self.development_sessions + self.blind_sessions
 
+    @property
+    def walk_required_sessions(self) -> int:
+        return (
+            self.walk_train_sessions
+            + self.walk_test_sessions
+            + self.walk_step_sessions * (self.walk_windows - 1)
+        )
+
+    @property
+    def required_sessions(self) -> int:
+        if self.validation_mode == "WALK_FORWARD":
+            return max(self.total_sessions, self.walk_required_sessions)
+        return self.total_sessions
+
 
 def validate_replay_config(config: ShadowReplayConfig) -> ShadowReplayConfig:
     if not 1 <= int(config.development_sessions) <= MAX_REPLAY_SESSION_INPUT:

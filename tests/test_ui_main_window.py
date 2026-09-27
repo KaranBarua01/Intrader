@@ -64,3 +64,21 @@ def test_accent_is_runtime_switchable_without_theme_modes(monkeypatch) -> None:
     assert window.accent_selector.accent() == "#5E7FAE"
     assert not hasattr(window, "theme_combo")
     assert not hasattr(window, "layout_combo")
+
+
+def test_shadow_trader_is_a_primary_navigation_tab(monkeypatch) -> None:
+    app, window = _window(monkeypatch)
+    app.processEvents()
+
+    assert "Shadow Trader" in window._nav_buttons
+    assert window._nav_buttons["Shadow Trader"].text() == "Shadow Trader"
+    assert all(
+        action.text() != "Shadow Trader"
+        for action in window.more_menu.actions()
+    )
+
+    window.show_page("Shadow Trader")
+    app.processEvents()
+
+    assert window.stack.currentWidget() is window._pages["Shadow Trader"]
+    assert window._nav_buttons["Shadow Trader"].property("active") is True

@@ -193,7 +193,7 @@ def test_market_chart_exposes_candle_timeframes_and_aggregates() -> None:
     )
 
     assert set(chart.timeframe_buttons) == {
-        "1m", "3m", "5m", "15m", "30m", "1H", "Auto"
+        "1m", "3m", "5m", "15m", "30m", "1H", "1D", "Auto"
     }
 
     chart.set_candle_objects(candles)
@@ -248,6 +248,7 @@ def test_time_travel_defaults_to_approved_range_workspace() -> None:
 
     assert page.tabs.currentIndex() == 1
     assert page.tabs.tabBar().isVisible() is False
+    assert page.session_view_button.text() == "Session to Now"
     assert page.replay_view_button.text() == "30m Replay"
     assert page.range_view_button.text() == "Range Analysis"
 
@@ -271,3 +272,45 @@ def test_logo_colors_are_fixed_and_not_accent_driven() -> None:
     assert LOGO_RED == "#FF1018"
     assert LOGO_GREY == "#666666"
     assert not hasattr(mark, "set_accent")
+
+
+
+def test_market_chart_limits_vertical_zoom_to_five_points() -> None:
+    app = QApplication.instance() or QApplication([])
+    chart = MarketChart()
+
+    limits = chart.plot.getViewBox().state["limits"]
+
+    assert limits["minYRange"] == 5.0
+
+
+def test_daily_candle_aggregation_keeps_one_candle_per_session() -> None:
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from intrader.historical import Candle, INDIA_TIME
+
+    start = datetime(2026, 9, 24, 9, 15, tzinfo=INDIA_TIME)
+    candles = (
+        Candle(start, Decimal("100"), Decimal("103"), Decimal("99"), Decimal("102"), 1000),
+        Candle(start + timedelta(minutes=30), Decimal("102"), Decimal("104"), Decimal("101"), Decimal("103"), 1200),
+        Candle(start + timedelta(days=1), Decimal("104"), Decimal("106"), Decimal("103"), Decimal("105"), 1100),
+        Candle(start + timedelta(days=1, minutes=30), Decimal("105"), Decimal("107"), Decimal("104"), Decimal("106"), 1300),
+    )
+
+    rows = MarketChart._aggregate(candles, 375)
+
+    assert len(rows) == 2
+    assert rows[0][1:] == (100.0, 103.0, 99.0, 104.0)
+    assert rows[1][1:] == (104.0, 106.0, 103.0, 107.0)
+
+
+def test_time_travel_exposes_session_to_now_and_news_context() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = TimeTravelPage()
+
+    assert page.session_view_button.text() == "Session to Now"
+    assert any(
+        page.detail_tabs.tabText(i) == "News Context"
+        for i in range(page.detail_tabs.count())
+    )
+    assert page.session_guidance.isHidden()

@@ -476,6 +476,41 @@ class StatusPill(QLabel):
         )
 
 
+class BulletList(QWidget):
+    """Compact editorial bullet list used inside shared cards."""
+
+    def __init__(self, empty_text: str = "No recorded reasoning.") -> None:
+        super().__init__()
+        self.empty_text = empty_text
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(5)
+        self.set_reasons([])
+
+    def _clear(self) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def set_reasons(self, reasons: list[tuple[str, str]]) -> None:
+        self._clear()
+        if not reasons:
+            label = QLabel(self.empty_text)
+            label.setObjectName("Muted")
+            label.setWordWrap(True)
+            self._layout.addWidget(label)
+            self._layout.addStretch(1)
+            return
+        for _code, explanation in reasons[:6]:
+            label = QLabel(f"●  {explanation}")
+            label.setWordWrap(True)
+            label.setObjectName("Muted")
+            self._layout.addWidget(label)
+        self._layout.addStretch(1)
+
+
 class ReasonList(Card):
     def __init__(self, title: str) -> None:
         super().__init__(title)

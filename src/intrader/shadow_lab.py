@@ -271,6 +271,13 @@ def replay_mode(key: str) -> ReplayModeSpec:
     raise ValueError(f"unknown Shadow Trader replay mode: {key}")
 
 
+def development_blind_split(sessions: int) -> tuple[int, int]:
+    if sessions not in REPLAY_SESSION_OPTIONS:
+        raise ValueError(f"unsupported Shadow Trader replay range: {sessions}")
+    blind = sessions // 3
+    return sessions - blind, blind
+
+
 if len(flattened_features()) != DEFAULT_SHADOW_LAB_PLAN.feature_count:
     raise RuntimeError("Shadow Trader feature catalog must contain exactly 50 features.")
 

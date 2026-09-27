@@ -456,15 +456,17 @@ def _run_one_frozen_engine(
     config: ShadowReplayConfig,
     timeline: HistoricalFeatureTimeline,
     enabled_families: Sequence[str],
+    selection: FrozenStrategySelection | None = None,
 ) -> tuple[FrozenStrategySelection, FrozenEngineSpec, StreamEngineReport]:
-    development_aggregated = _aggregate_candles(
-        development_one_minute,
-        timeframe_minutes,
-    )
-    selection = train_frozen_strategy(
-        development_aggregated,
-        development_sessions=config.development_sessions,
-    )
+    if selection is None:
+        development_aggregated = _aggregate_candles(
+            development_one_minute,
+            timeframe_minutes,
+        )
+        selection = train_frozen_strategy(
+            development_aggregated,
+            development_sessions=config.development_sessions,
+        )
     engine_id = _engine_id(
         timeframe_minutes,
         selection,
@@ -501,6 +503,7 @@ def _build_trader(
     config: ShadowReplayConfig,
     timeline: HistoricalFeatureTimeline,
     enabled_families: Sequence[str],
+    selection: FrozenStrategySelection | None = None,
 ) -> ArenaTraderReport:
     selection, spec, stream = _run_one_frozen_engine(
         development_one_minute=development_one_minute,
@@ -509,6 +512,7 @@ def _build_trader(
         config=config,
         timeline=timeline,
         enabled_families=enabled_families,
+        selection=selection,
     )
     label = TRADER_LABELS[timeframe_minutes]
     blind_trades = tuple(
@@ -562,6 +566,7 @@ def _run_ablations(
     config: ShadowReplayConfig,
     timeline: HistoricalFeatureTimeline,
     coverage: FeatureCoverageAudit,
+    selections: dict[int, FrozenStrategySelection],
 ) -> tuple[AblationResult, ...]:
     rows: list[AblationResult] = []
     for timeframe in config.trader_timeframes:
@@ -574,6 +579,7 @@ def _run_ablations(
                 config=config,
                 timeline=timeline,
                 enabled_families=families,
+                selection=selections[timeframe],
             )
             account = stream.account
             rows.append(
@@ -712,6 +718,17 @@ def run_shadow_arena(
         )
 
     enabled_families = feature_coverage.decision_used_families
+    selections: dict[int, FrozenStrategySelection] = {}
+    for timeframe in config.trader_timeframes:
+        development_aggregated = _aggregate_candles(
+            development,
+            timeframe,
+        )
+        selections[timeframe] = train_frozen_strategy(
+            development_aggregated,
+            development_sessions=config.development_sessions,
+        )
+
     trader_reports = tuple(
         _build_trader(
             development_one_minute=development,
@@ -720,6 +737,7 @@ def run_shadow_arena(
             config=config,
             timeline=timeline,
             enabled_families=enabled_families,
+            selection=selections[timeframe],
         )
         for timeframe in config.trader_timeframes
     )
@@ -730,6 +748,7 @@ def run_shadow_arena(
         config=config,
         timeline=timeline,
         coverage=feature_coverage,
+        selections=selections,
     )
     walk_forward = _run_walk_forward(
         candles=ordered,

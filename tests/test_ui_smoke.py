@@ -316,3 +316,16 @@ def test_time_travel_exposes_session_to_now_and_news_context() -> None:
         for i in range(page.detail_tabs.count())
     )
     assert page.session_guidance.isHidden()
+
+
+def test_light_theme_explicitly_styles_native_like_menus_and_dialogs() -> None:
+    from intrader.ui.theme import build_stylesheet
+
+    stylesheet = build_stylesheet("#5E7FAE")
+
+    assert "QMenu {" in stylesheet
+    assert "QMessageBox {" in stylesheet
+    assert "QMessageBox QLabel {" in stylesheet
+    assert "QComboBox QAbstractItemView {" in stylesheet
+    assert "background: #FEFDFB;" in stylesheet
+    assert "color: #17191c;" in stylesheet

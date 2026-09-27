@@ -7,7 +7,9 @@ or the existing Market Brain.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, Signal
+from datetime import datetime, timedelta
+
+from PySide6.QtCore import QPointF, QTimer, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -30,7 +32,13 @@ from intrader.shadow_lab import (
     development_blind_split,
     replay_mode,
 )
-from intrader.ui.components import Card, DataTable, MetricCard, ResponsiveMetricGrid
+from intrader.ui.components import (
+    Card,
+    DataTable,
+    MarketChart,
+    MetricCard,
+    ResponsiveMetricGrid,
+)
 
 
 class ReplayEquityCurve(QWidget):
@@ -100,11 +108,25 @@ class ShadowTraderPage(QWidget):
 
     replay_requested = Signal(int, str)
     replay_export_requested = Signal(int, str)
+    playback_finished = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.plan = DEFAULT_SHADOW_LAB_PLAN
         self._replay_running = False
+        self._playback_timer = QTimer(self)
+        self._playback_timer.setInterval(50)
+        self._playback_timer.timeout.connect(self._playback_tick)
+        self._playback_candles = ()
+        self._playback_report = None
+        self._playback_index = 0
+        self._playback_trade_index = 0
+        self._playback_trades = ()
+        self._playback_open: list[tuple[object, datetime]] = []
+        self._playback_tape_rows: list[list[object]] = []
+        self._playback_realized = 0.0
+        self._playback_session_dates = ()
+        self._playback_last_chart_at = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 34)
@@ -134,6 +156,8 @@ class ShadowTraderPage(QWidget):
 
         self.tabs.addTab(self._build_overview(), "Overview")
         self.tabs.addTab(self._build_historical(), "Replay")
+        self.live_page = self._build_live_replay()
+        self.live_tab_index = self.tabs.addTab(self.live_page, "Live Replay")
         self.results_page = self._build_results()
         self.results_tab_index = self.tabs.addTab(self.results_page, "Results")
         self.tabs.addTab(self._build_forward(), "60-Day Forward")
@@ -303,6 +327,97 @@ class ShadowTraderPage(QWidget):
         self.replay_start_button.clicked.connect(self._request_replay)
         self.replay_export_button.clicked.connect(self._request_export)
         self._sync_replay_controls()
+        return page
+
+    def _build_live_replay(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.setContentsMargins(4, 8, 4, 4)
+        root.setSpacing(8)
+
+        controls = Card("SIMULATED LIVE REPLAY")
+        row = QHBoxLayout()
+        self.live_status = QLabel(
+            "Waiting for a historical replay. This view is display-only and never sends broker orders."
+        )
+        self.live_status.setWordWrap(True)
+        row.addWidget(self.live_status, 1)
+
+        row.addWidget(QLabel("Speed"))
+        self.live_speed = QComboBox()
+        for label, speed in (
+            ("100x", 100),
+            ("500x", 500),
+            ("1000x", 1000),
+            ("MAX", 5000),
+        ):
+            self.live_speed.addItem(label, speed)
+        self.live_speed.setCurrentIndex(self.live_speed.findData(500))
+        row.addWidget(self.live_speed)
+
+        self.live_pause_button = QPushButton("Ⅱ  Pause")
+        self.live_pause_button.setEnabled(False)
+        self.live_pause_button.clicked.connect(self._toggle_playback_pause)
+        row.addWidget(self.live_pause_button)
+
+        self.live_skip_button = QPushButton("Skip to Results")
+        self.live_skip_button.setEnabled(False)
+        self.live_skip_button.clicked.connect(self._finish_playback)
+        row.addWidget(self.live_skip_button)
+        controls.layout_box.addLayout(row)
+        root.addWidget(controls)
+
+        self.live_clock_metric = MetricCard("SIMULATED CLOCK")
+        self.live_phase_metric = MetricCard("PHASE")
+        self.live_price_metric = MetricCard("NIFTY")
+        self.live_action_metric = MetricCard("SHADOW STATE")
+        self.live_proxy_metric = MetricCard("REALIZED PROXY RETURN")
+        self.live_session_metric = MetricCard("SESSION")
+        for metric in (
+            self.live_clock_metric,
+            self.live_phase_metric,
+            self.live_price_metric,
+            self.live_action_metric,
+            self.live_proxy_metric,
+            self.live_session_metric,
+        ):
+            metric.set_value("—")
+        root.addWidget(
+            ResponsiveMetricGrid(
+                [
+                    self.live_clock_metric,
+                    self.live_phase_metric,
+                    self.live_price_metric,
+                    self.live_action_metric,
+                    self.live_proxy_metric,
+                    self.live_session_metric,
+                ],
+                compact_height=78,
+            )
+        )
+
+        self.live_chart = MarketChart("SIMULATED NIFTY — HISTORICAL PLAYBACK")
+        self.live_chart.set_timeframe("1m")
+        root.addWidget(self.live_chart, 1)
+
+        tape = Card("SHADOW TRADE TAPE")
+        self.live_tape = DataTable(
+            [
+                "Time", "Phase", "Event", "Direction", "Entry NIFTY",
+                "Current / Exit", "30m Return", "Status",
+            ]
+        )
+        tape.add_widget(self.live_tape)
+        root.addWidget(tape, 1)
+
+        note = QLabel(
+            "Development playback is research visualization because the frozen strategy is selected "
+            "from the full development block. The blind segment is the authentic live-like test. "
+            "Trade outcomes are revealed only after simulated time reaches +30 minutes."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("Muted")
+        root.addWidget(note)
         return page
 
     def _build_results(self) -> QWidget:
@@ -613,7 +728,7 @@ class ShadowTraderPage(QWidget):
     def _fmt_number(value, digits: int = 2) -> str:
         return "N/A" if value is None else f"{value:.{digits}f}"
 
-    def set_replay_report(self, report) -> None:
+    def set_replay_report(self, report, *, open_results: bool = True) -> None:
         strategy = report.selected_strategy_name or "None"
         self.replay_strategy_metric.set_value(strategy)
         self.replay_win_metric.set_value(
@@ -723,6 +838,209 @@ class ShadowTraderPage(QWidget):
             ]
         )
         self.results_export_button.setEnabled(True)
+        if open_results:
+            self.tabs.setCurrentIndex(self.results_tab_index)
+
+    def begin_visual_playback(self, candles, report) -> None:
+        """Animate a display-only historical playback without changing replay results."""
+
+        self._playback_timer.stop()
+        self._playback_candles = tuple(sorted(candles, key=lambda item: item.at))
+        self._playback_report = report
+        self._playback_index = 0
+        self._playback_trade_index = 0
+        self._playback_trades = tuple(
+            sorted(
+                report.trades,
+                key=lambda trade: datetime.fromisoformat(trade.at),
+            )
+        )
+        self._playback_open = []
+        self._playback_tape_rows = []
+        self._playback_realized = 0.0
+        self._playback_session_dates = tuple(sorted({
+            candle.at.date() for candle in self._playback_candles
+        }))
+        self._playback_last_chart_at = None
+        self.live_tape.set_rows([])
+        self.live_chart.set_empty_message("Preparing simulated historical playback…")
+        self.live_pause_button.setEnabled(bool(self._playback_candles))
+        self.live_pause_button.setText("Ⅱ  Pause")
+        self.live_skip_button.setEnabled(bool(self._playback_candles))
+        self.tabs.setCurrentIndex(self.live_tab_index)
+
+        if not self._playback_candles:
+            self.live_status.setText("No candles are available for visual playback.")
+            self._finish_playback()
+            return
+
+        self.live_status.setText(
+            "PLAYING — historical candles are being revealed chronologically. "
+            "No future trade outcome is shown before simulated +30 minutes."
+        )
+        self._playback_timer.start()
+
+    def _playback_speed(self) -> int:
+        value = self.live_speed.currentData()
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 500
+
+    def _playback_phase(self, day) -> tuple[str, int]:
+        try:
+            session_index = self._playback_session_dates.index(day)
+        except ValueError:
+            return "UNKNOWN", 0
+        report = self._playback_report
+        if report is None:
+            return "UNKNOWN", session_index + 1
+        if session_index < report.development_sessions:
+            return "DEVELOPMENT", session_index + 1
+        return "BLIND — FROZEN", session_index + 1
+
+    def _append_tape_row(self, row: list[object]) -> None:
+        self._playback_tape_rows.append(row)
+        self._playback_tape_rows = self._playback_tape_rows[-60:]
+        self.live_tape.set_rows(self._playback_tape_rows)
+
+    def _open_due_trades(self, current_at: datetime) -> None:
+        while self._playback_trade_index < len(self._playback_trades):
+            trade = self._playback_trades[self._playback_trade_index]
+            opened_at = datetime.fromisoformat(trade.at)
+            if opened_at > current_at:
+                break
+            self._playback_trade_index += 1
+            self._playback_open.append((trade, opened_at))
+            self._append_tape_row(
+                [
+                    opened_at.strftime("%d %b %H:%M"),
+                    trade.phase,
+                    "OPEN",
+                    trade.direction,
+                    f"{trade.entry_underlying:.2f}",
+                    "—",
+                    "hidden",
+                    "ACTIVE",
+                ]
+            )
+
+    def _close_due_trades(self, current_at: datetime) -> None:
+        still_open: list[tuple[object, datetime]] = []
+        for trade, opened_at in self._playback_open:
+            if current_at < opened_at + timedelta(minutes=30):
+                still_open.append((trade, opened_at))
+                continue
+            value = trade.return_30m_pct
+            if value is not None:
+                self._playback_realized += float(value)
+            self._append_tape_row(
+                [
+                    current_at.strftime("%d %b %H:%M"),
+                    trade.phase,
+                    "CLOSE +30m",
+                    trade.direction,
+                    f"{trade.entry_underlying:.2f}",
+                    (
+                        "N/A"
+                        if trade.approx_exit_underlying_30m is None
+                        else f"{trade.approx_exit_underlying_30m:.2f}"
+                    ),
+                    self._fmt_pct(value, 4),
+                    trade.result,
+                ]
+            )
+        self._playback_open = still_open
+
+    def _current_shadow_state(self, current_price) -> str:
+        if not self._playback_open:
+            return "WAIT / NO OPEN SIGNAL"
+        trade, _opened_at = self._playback_open[-1]
+        entry = float(trade.entry_underlying)
+        price = float(current_price)
+        signed = ((price - entry) / entry) * 100.0
+        if "PUT" in trade.direction or "SHORT" in trade.direction:
+            signed *= -1.0
+        return f"{trade.direction} • {signed:+.3f}% proxy"
+
+    def _playback_tick(self) -> None:
+        if not self._playback_candles or self._playback_index >= len(self._playback_candles):
+            self._finish_playback()
+            return
+
+        speed = self._playback_speed()
+        candles_per_tick = max(1, int(speed * self._playback_timer.interval() / 1000))
+        next_index = min(
+            len(self._playback_candles),
+            self._playback_index + candles_per_tick,
+        )
+        current = self._playback_candles[next_index - 1]
+        self._playback_index = next_index
+
+        current_at = current.at
+        self._open_due_trades(current_at)
+        self._close_due_trades(current_at)
+
+        phase, session_number = self._playback_phase(current_at.date())
+        self.live_clock_metric.set_value(current_at.strftime("%d %b %Y • %H:%M"))
+        self.live_phase_metric.set_value(phase)
+        self.live_price_metric.set_value(f"{float(current.close):,.2f}")
+        self.live_action_metric.set_value(self._current_shadow_state(current.close))
+        self.live_proxy_metric.set_value(f"{self._playback_realized:+.4f}%")
+        self.live_session_metric.set_value(
+            f"{session_number} / {len(self._playback_session_dates)}"
+        )
+
+        current_day = current_at.date()
+        visible = [
+            candle
+            for candle in self._playback_candles[:next_index]
+            if candle.at.date() == current_day
+        ][-120:]
+        if visible:
+            self.live_chart.set_candle_objects(visible)
+
+        report = self._playback_report
+        if report is not None:
+            self.set_replay_progress(
+                min(session_number, report.requested_sessions),
+                report.requested_sessions,
+                (
+                    f"VISUAL REPLAY — {phase} • {current_at.strftime('%d %b %H:%M')} • "
+                    f"{len(self._playback_open)} active research signal(s)"
+                ),
+            )
+
+        if self._playback_index >= len(self._playback_candles):
+            self._finish_playback()
+
+    def _toggle_playback_pause(self) -> None:
+        if self._playback_timer.isActive():
+            self._playback_timer.stop()
+            self.live_pause_button.setText("▶  Resume")
+            self.live_status.setText("PAUSED — simulated market clock is frozen.")
+        elif self._playback_candles and self._playback_index < len(self._playback_candles):
+            self._playback_timer.start()
+            self.live_pause_button.setText("Ⅱ  Pause")
+            self.live_status.setText(
+                "PLAYING — historical candles are being revealed chronologically."
+            )
+
+    def _finish_playback(self) -> None:
+        was_running = self._playback_timer.isActive() or (
+            self._playback_candles and self._playback_index < len(self._playback_candles)
+        )
+        self._playback_timer.stop()
+        self.live_pause_button.setEnabled(False)
+        self.live_skip_button.setEnabled(False)
+        if self._playback_report is not None:
+            self.live_status.setText(
+                "PLAYBACK COMPLETE — opening the locked replay results."
+            )
+        if was_running or self._playback_report is not None:
+            self.playback_finished.emit()
+
+    def show_replay_results(self) -> None:
         self.tabs.setCurrentIndex(self.results_tab_index)
 
     def set_replay_finished(self, status: str) -> None:

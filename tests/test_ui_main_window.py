@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 import intrader.ui.utility_pages as utility_pages
+from intrader.historical import Candle, INDIA_TIME
 from intrader.ui.main_window import MainWindow
 
 
@@ -162,3 +164,70 @@ def test_shadow_trader_results_tab_populates_and_opens(monkeypatch) -> None:
     assert page.results_trades.rowCount() == 1
     assert page.results_comparison.rowCount() == 2
     assert page.results_candidates.rowCount() == 1
+
+
+def test_shadow_trader_live_replay_hides_outcome_until_plus_30_minutes(monkeypatch) -> None:
+    app, window = _window(monkeypatch)
+    page = window.shadow_page
+    start = datetime(2026, 8, 3, 9, 15, tzinfo=INDIA_TIME)
+    candles = tuple(
+        Candle(
+            at=start + timedelta(minutes=index),
+            open=Decimal("24000") + Decimal(index),
+            high=Decimal("24002") + Decimal(index),
+            low=Decimal("23998") + Decimal(index),
+            close=Decimal("24001") + Decimal(index),
+            volume=1000 + index,
+        )
+        for index in range(31)
+    )
+    trade = SimpleNamespace(
+        phase="BLIND",
+        at=start.isoformat(),
+        direction="CALL / LONG",
+        entry_underlying=Decimal("24001"),
+        approx_exit_underlying_30m=Decimal("24031"),
+        return_5m_pct=Decimal("0.02"),
+        return_15m_pct=Decimal("0.06"),
+        return_30m_pct=Decimal("0.125"),
+        mfe_30m_pct=Decimal("0.14"),
+        mae_30m_pct=Decimal("-0.03"),
+        result="WIN",
+    )
+    report = SimpleNamespace(
+        development_sessions=0,
+        requested_sessions=1,
+        trades=(trade,),
+    )
+
+    page.begin_visual_playback(candles, report)
+    page._playback_timer.stop()
+    page.live_speed.setCurrentIndex(page.live_speed.findData(500))
+
+    page._playback_tick()
+    app.processEvents()
+
+    assert page.tabs.tabText(page.live_tab_index) == "Live Replay"
+    assert page.live_tape.rowCount() == 1
+    assert page.live_tape.item(0, 6).text() == "hidden"
+    assert page.live_tape.item(0, 7).text() == "ACTIVE"
+
+    page._playback_tick()
+    app.processEvents()
+
+    assert page.live_tape.rowCount() == 2
+    assert page.live_tape.item(1, 2).text() == "CLOSE +30m"
+    assert page.live_tape.item(1, 6).text() == "0.1250%"
+    assert page.live_tape.item(1, 7).text() == "WIN"
+
+
+def test_shadow_trader_live_replay_has_speed_and_skip_controls(monkeypatch) -> None:
+    app, window = _window(monkeypatch)
+    page = window.shadow_page
+    app.processEvents()
+
+    assert [page.live_speed.itemText(i) for i in range(page.live_speed.count())] == [
+        "100x", "500x", "1000x", "MAX"
+    ]
+    assert page.live_speed.currentData() == 500
+    assert page.live_skip_button.text() == "Skip to Results"

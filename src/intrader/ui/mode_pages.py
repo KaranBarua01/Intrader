@@ -15,7 +15,7 @@ import pyqtgraph as pg
 from intrader.historical import INDIA_TIME
 from intrader.ui.components import (
     BEARISH_COLOR, BULLISH_COLOR, BulletList, Card, DataTable, DecisionCard,
-    DotMatrix, MarketChart, MetricCard, MetricRibbon, ReasonList,
+    DotMatrix, MarketChart, MetricCard, MetricRibbon, MixBars, ReasonList,
     ResponsiveMetricGrid, TextPanel,
 )
 
@@ -482,17 +482,27 @@ class TimeTravelPage(QWidget):
         title = QLabel("Time Travel")
         title.setObjectName("PageTitle")
         title_row.addWidget(title)
-        hint = QLabel("Local-first historical research • network enrichment is opt-in")
+        hint = QLabel("Historical research • opening possibilities")
         hint.setObjectName("Muted")
         title_row.addWidget(hint)
         title_row.addStretch(1)
+        self.replay_view_button = QPushButton("30m Replay")
+        self.replay_view_button.setObjectName("SecondaryButton")
+        self.range_view_button = QPushButton("Range Analysis")
+        self.range_view_button.setObjectName("SecondaryButton")
+        title_row.addWidget(self.replay_view_button)
+        title_row.addWidget(self.range_view_button)
+        title_row.addWidget(DotMatrix(columns=4, rows=3))
         root.addLayout(title_row)
 
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setVisible(False)
         root.addWidget(self.tabs, 1)
         self._build_replay_tab()
         self._build_range_tab()
         self.tabs.setCurrentIndex(1)
+        self.replay_view_button.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
+        self.range_view_button.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
 
         self.timer = QTimer(self)
         self.timer.setInterval(900)
@@ -722,12 +732,12 @@ class TimeTravelPage(QWidget):
         side_layout.setSpacing(8)
 
         decision_card = Card("Decision Mix")
-        self.range_decisions = DataTable(["Decision", "Count"])
+        self.range_decisions = MixBars()
         decision_card.add_widget(self.range_decisions)
         side_layout.addWidget(decision_card)
 
         regime_card = Card("Regime Mix")
-        self.range_regimes = DataTable(["Regime", "Count"])
+        self.range_regimes = MixBars()
         regime_card.add_widget(self.range_regimes)
         side_layout.addWidget(regime_card)
 

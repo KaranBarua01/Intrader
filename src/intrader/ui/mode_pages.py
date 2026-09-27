@@ -489,6 +489,7 @@ class TimeTravelPage(QWidget):
         root.addWidget(self.tabs, 1)
         self._build_replay_tab()
         self._build_range_tab()
+        self.tabs.setCurrentIndex(1)
 
         self.timer = QTimer(self)
         self.timer.setInterval(900)
@@ -606,41 +607,48 @@ class TimeTravelPage(QWidget):
     def _build_range_tab(self) -> None:
         range_tab = QWidget()
         range_root = QVBoxLayout(range_tab)
-        range_root.setContentsMargins(8, 8, 8, 8)
-        range_root.setSpacing(8)
+        range_root.setContentsMargins(4, 4, 4, 4)
+        range_root.setSpacing(10)
 
-        date_row = QHBoxLayout()
-        date_row.addWidget(QLabel("From"))
+        controls_card = Card()
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
+
+        controls.addWidget(QLabel("From"))
         self.range_from_day = QDateEdit(QDate.currentDate().addDays(-5))
         self.range_from_day.setCalendarPopup(True)
         self.range_from_day.setDisplayFormat("dd MMM yyyy")
         self.range_from_time = QTimeEdit(QTime(9, 15))
         self.range_from_time.setDisplayFormat("HH:mm")
         self.range_from_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        date_row.addWidget(self.range_from_day)
-        date_row.addWidget(self.range_from_time)
-        date_row.addWidget(QLabel("To"))
+        controls.addWidget(self.range_from_day)
+        controls.addWidget(self.range_from_time)
+
+        arrow = QLabel("→")
+        arrow.setObjectName("Muted")
+        controls.addWidget(arrow)
+
         self.range_to_day = QDateEdit(QDate.currentDate())
         self.range_to_day.setCalendarPopup(True)
         self.range_to_day.setDisplayFormat("dd MMM yyyy")
         self.range_to_time = QTimeEdit(QTime(15, 30))
         self.range_to_time.setDisplayFormat("HH:mm")
         self.range_to_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        date_row.addWidget(self.range_to_day)
-        date_row.addWidget(self.range_to_time)
-        self.range_load_button = QPushButton("Analyze Period")
+        controls.addWidget(self.range_to_day)
+        controls.addWidget(self.range_to_time)
+
+        self.range_load_button = QPushButton("▶  Analyze Period")
         self.range_load_button.setObjectName("PrimaryButton")
+        controls.addWidget(self.range_load_button)
         self.range_enrich_button = QPushButton("Fetch Missing")
+        self.range_enrich_button.setObjectName("SecondaryButton")
         self.range_enrich_button.setToolTip(
             "Opt-in network enrichment; analysis itself stays local/read-only."
         )
-        date_row.addWidget(self.range_load_button)
-        date_row.addWidget(self.range_enrich_button)
-        date_row.addStretch(1)
-        range_root.addLayout(date_row)
+        controls.addWidget(self.range_enrich_button)
+        controls.addStretch(1)
 
-        preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("Quick range"))
         self.preset_1h = QPushButton("1H")
         self.preset_today = QPushButton("Today")
         self.preset_5d = QPushButton("5D")
@@ -653,54 +661,77 @@ class TimeTravelPage(QWidget):
             self.preset_10d,
             self.preset_30d,
         ):
-            preset_row.addWidget(button)
-        preset_row.addStretch(1)
+            button.setObjectName("SecondaryButton")
+            controls.addWidget(button)
+
+        controls_card.layout_box.addLayout(controls)
+        range_root.addWidget(controls_card)
+
+        state_row = QHBoxLayout()
+        state_row.addStretch(1)
         self.range_state = QLabel("No range analyzed yet.")
         self.range_state.setObjectName("Muted")
-        preset_row.addWidget(self.range_state)
-        range_root.addLayout(preset_row)
+        state_row.addWidget(self.range_state)
+        range_root.addLayout(state_row)
 
         self.range_metrics = MetricRibbon([
-            ("NIFTY", "N/A"),
+            ("NIFTY CHANGE", "N/A"),
             ("SESSIONS", "0"),
             ("HIGH / LOW", "N/A"),
             ("SHADOW P&L", "0"),
             ("EXPECTANCY", "N/A"),
-            ("NEWS", "0"),
+            ("RELEVANT NEWS", "0"),
         ])
         range_root.addWidget(self.range_metrics)
 
         self.range_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.range_chart = MarketChart("PRICE CHART — SELECTED RANGE")
-        self.range_chart.setMinimumHeight(255)
+        self.range_chart = MarketChart("Price Chart — Selected Range")
+        self.range_chart.setMinimumHeight(330)
         self.range_splitter.addWidget(self.range_chart)
 
         self.opening_panel = OpeningScenarioPanel()
         self.range_splitter.addWidget(self.opening_panel)
-        self.range_splitter.setStretchFactor(0, 6)
-        self.range_splitter.setStretchFactor(1, 4)
-        range_root.addWidget(self.range_splitter, 3)
+        self.range_splitter.setStretchFactor(0, 58)
+        self.range_splitter.setStretchFactor(1, 42)
+        range_root.addWidget(self.range_splitter, 4)
 
+        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.detail_tabs = QTabWidget()
         self.key_moments = DataTable(
-            ["Time", "Type", "Importance", "Summary", "Detail"]
+            ["Date / Time", "Event", "Importance", "Context", "Detail"]
         )
         self.detail_tabs.addTab(self.key_moments, "Key Moments")
 
         self.range_notes = TextPanel(
-            "WHAT HAPPENED / EVIDENCE AROUND WHY",
+            "Period Analysis",
             "No period analysis available yet.",
         )
         self.detail_tabs.addTab(self.range_notes, "Period Analysis")
 
-        self.range_decisions = DataTable(["Decision", "Count"])
-        self.detail_tabs.addTab(self.range_decisions, "Decision Mix")
-        self.range_regimes = DataTable(["Regime", "Count"])
-        self.detail_tabs.addTab(self.range_regimes, "Regime Mix")
         self.range_coverage = DataTable(["Data family", "Coverage"])
         self.detail_tabs.addTab(self.range_coverage, "Data Coverage")
-        self.detail_tabs.setMinimumHeight(155)
-        range_root.addWidget(self.detail_tabs, 2)
+        self.detail_tabs.setMinimumHeight(190)
+        bottom_splitter.addWidget(self.detail_tabs)
+
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(8)
+
+        decision_card = Card("Decision Mix")
+        self.range_decisions = DataTable(["Decision", "Count"])
+        decision_card.add_widget(self.range_decisions)
+        side_layout.addWidget(decision_card)
+
+        regime_card = Card("Regime Mix")
+        self.range_regimes = DataTable(["Regime", "Count"])
+        regime_card.add_widget(self.range_regimes)
+        side_layout.addWidget(regime_card)
+
+        bottom_splitter.addWidget(side)
+        bottom_splitter.setStretchFactor(0, 70)
+        bottom_splitter.setStretchFactor(1, 30)
+        range_root.addWidget(bottom_splitter, 2)
 
         self.tabs.addTab(range_tab, "Range Analysis / Opening Possibilities")
 
@@ -837,7 +868,7 @@ class TimeTravelPage(QWidget):
             f"{analysis.candle_count:,} candles"
         )
         self.range_metrics.set_metric(
-            "NIFTY",
+            "NIFTY CHANGE",
             "N/A" if analysis.change_pct is None else f"{analysis.change_pct:.3f}%",
             _tone(analysis.change_pct),
         )
@@ -863,7 +894,7 @@ class TimeTravelPage(QWidget):
             _tone(analysis.expectancy),
         )
         self.range_metrics.set_metric(
-            "NEWS",
+            "RELEVANT NEWS",
             str(analysis.news_count),
             tooltip="Filtered market-relevant context",
         )
@@ -876,6 +907,14 @@ class TimeTravelPage(QWidget):
             )
 
         self.opening_panel.set_snapshot(opening)
+        context_summary = " ".join(str(item) for item in analysis.analysis_notes[:2])
+        self.opening_panel.set_analysis_context(
+            context_summary
+            or (
+                f"NIFTY range analysis covers {analysis.session_count} sessions "
+                f"with {analysis.candle_count:,} stored candles."
+            )
+        )
 
         self.range_notes.set_text(
             list(analysis.analysis_notes)

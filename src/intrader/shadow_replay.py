@@ -315,7 +315,9 @@ def _trade(phase: str, occurrence: StrategyOccurrence) -> ReplayTradeResult:
 def run_candle_proxy_replay(
     candles: Sequence[Candle],
     *,
-    sessions: int,
+    sessions: int | None = None,
+    development_sessions: int | None = None,
+    blind_sessions: int | None = None,
     mode_key: str,
 ) -> ShadowReplayReport:
     """Run a development/blind replay without future leakage.
@@ -325,13 +327,26 @@ def run_candle_proxy_replay(
     """
 
     mode = replay_mode(mode_key)
-    development_target, blind_target = development_blind_split(sessions)
-    selected, dates = _slice_sessions(candles, sessions)
+    if development_sessions is not None or blind_sessions is not None:
+        if development_sessions is None or blind_sessions is None:
+            raise ValueError("development and blind sessions must be provided together")
+        development_target = int(development_sessions)
+        blind_target = int(blind_sessions)
+        if development_target < 1 or blind_target < 1:
+            raise ValueError("development and blind sessions must both be at least 1")
+        requested_sessions = development_target + blind_target
+    else:
+        if sessions is None:
+            raise ValueError("replay session count is required")
+        requested_sessions = int(sessions)
+        development_target, blind_target = development_blind_split(requested_sessions)
+
+    selected, dates = _slice_sessions(candles, requested_sessions)
     actual_sessions = len(dates)
-    if actual_sessions < sessions:
+    if actual_sessions < requested_sessions:
         raise ValueError(
             f"only {actual_sessions} complete historical sessions are available; "
-            f"{sessions} were requested"
+            f"{requested_sessions} were requested"
         )
 
     development_dates = dates[:development_target]
@@ -354,12 +369,16 @@ def run_candle_proxy_replay(
     if not development_candles or not blind_candles:
         raise ValueError("historical replay candles unavailable")
 
+    analysis_limit_days = max(
+        30,
+        (selected[-1].at - selected[0].at).days + 3,
+    )
     development_snapshot = analyze_strategies(
         development_candles,
         (),
         development_candles[0].at,
         development_candles[-1].at,
-        max_days=220,
+        max_days=analysis_limit_days,
     )
     selected_strategy = _pick_strategy(
         development_snapshot,
@@ -371,7 +390,7 @@ def run_candle_proxy_replay(
         (),
         blind_candles[0].at,
         blind_candles[-1].at,
-        max_days=220,
+        max_days=analysis_limit_days,
     )
     strategy_id = (
         None
@@ -398,7 +417,7 @@ def run_candle_proxy_replay(
         schema="intrader-shadow-replay-v2-results",
         mode=mode.key,
         requested_touchpoints=mode.feature_count,
-        requested_sessions=sessions,
+        requested_sessions=requested_sessions,
         actual_sessions=actual_sessions,
         development_sessions=development_target,
         blind_sessions=blind_target,

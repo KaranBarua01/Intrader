@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from intrader.historical import INDIA_TIME
 from intrader.ui.components import (
-    Card, DataTable, MetricRibbon, TextPanel,
+    Card, DataTable, DotMatrix, MetricRibbon, TextPanel,
 )
 
 
@@ -64,53 +64,61 @@ class StrategyLabPage(QWidget):
         explainer.setObjectName("Muted")
         root.addWidget(explainer)
 
-        date_controls = QHBoxLayout()
-        date_controls.addWidget(QLabel("From"))
+        controls_card = Card()
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
+
+        controls.addWidget(QLabel("From"))
         self.from_day = QDateEdit(QDate.currentDate().addDays(-5))
         self.from_day.setCalendarPopup(True)
         self.from_day.setDisplayFormat("dd MMM yyyy")
         self.from_time = QTimeEdit(QTime(9, 15))
         self.from_time.setDisplayFormat("HH:mm")
         self.from_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        date_controls.addWidget(self.from_day)
-        date_controls.addWidget(self.from_time)
-        date_controls.addWidget(QLabel("To"))
+        controls.addWidget(self.from_day)
+        self.from_day.setMinimumWidth(118)
+        controls.addWidget(self.from_time)
+
+        controls.addWidget(QLabel("To"))
         self.to_day = QDateEdit(QDate.currentDate())
         self.to_day.setCalendarPopup(True)
         self.to_day.setDisplayFormat("dd MMM yyyy")
         self.to_time = QTimeEdit(QTime(15, 30))
         self.to_time.setDisplayFormat("HH:mm")
         self.to_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        date_controls.addWidget(self.to_day)
-        date_controls.addWidget(self.to_time)
+        controls.addWidget(self.to_day)
+        self.to_day.setMinimumWidth(118)
+        controls.addWidget(self.to_time)
 
-        self.analyze_button = QPushButton("Analyze Strategies")
-        self.analyze_button.setObjectName("PrimaryButton")
-        date_controls.addWidget(self.analyze_button)
-        self.fetch_button = QPushButton("Fetch Missing")
-        self.fetch_button.setToolTip(
-            "Explicit opt-in network enrichment. Strategy analysis itself is read-only."
-        )
-        date_controls.addWidget(self.fetch_button)
-        date_controls.addStretch(1)
-        root.addLayout(date_controls)
-
-        filter_controls = QHBoxLayout()
-        filter_controls.addWidget(QLabel("Quick range"))
         self.preset_5d = QPushButton("5D")
         self.preset_10d = QPushButton("10D")
         self.preset_30d = QPushButton("30D")
         for button in (self.preset_5d, self.preset_10d, self.preset_30d):
-            filter_controls.addWidget(button)
+            button.setObjectName("SecondaryButton")
+            controls.addWidget(button)
 
-        filter_controls.addWidget(QLabel("Source"))
+        controls.addWidget(QLabel("Source"))
         self.source_filter = QComboBox()
         self.source_filter.addItems(
             ["All", "Steve Nison", "Ashwani Gujral", "John Carter", "Mark Douglas"]
         )
-        filter_controls.addWidget(self.source_filter)
-        filter_controls.addStretch(1)
-        root.addLayout(filter_controls)
+        self.source_filter.setMinimumWidth(180)
+        controls.addWidget(self.source_filter)
+        controls.addStretch(1)
+
+        self.analyze_button = QPushButton("▶  Analyze Strategies")
+        self.analyze_button.setObjectName("PrimaryButton")
+        controls.addWidget(self.analyze_button)
+        self.fetch_button = QPushButton("Fetch Missing")
+        self.fetch_button.setObjectName("SecondaryButton")
+        self.fetch_button.setToolTip(
+            "Explicit opt-in network enrichment. Strategy analysis itself is read-only."
+        )
+        controls.addWidget(self.fetch_button)
+
+        controls_card.layout_box.addLayout(controls)
+        root.addWidget(controls_card)
 
         self.metrics = MetricRibbon([
             ("SIGNALS", "0"),
@@ -127,7 +135,10 @@ class StrategyLabPage(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         self.strategy_table = DataTable(
-            ["Strategy", "n", "5m", "15m", "30m", "Quality"]
+            [
+                "Source", "Strategy", "n", "Bull", "Bear", "5m", "15m", "30m",
+                "Avg30", "MFE", "MAE", "Sample",
+            ]
         )
         strategy_card = Card("Strategy performance")
         strategy_card.add_widget(self.strategy_table)
@@ -150,15 +161,15 @@ class StrategyLabPage(QWidget):
         self.detail_tabs.addTab(self.notes, "Interpretation")
         right_layout.addWidget(self.detail_tabs)
         self.main_splitter.addWidget(right)
-        self.main_splitter.setStretchFactor(0, 65)
-        self.main_splitter.setStretchFactor(1, 35)
+        self.main_splitter.setStretchFactor(0, 72)
+        self.main_splitter.setStretchFactor(1, 28)
         root.addWidget(self.main_splitter, 2)
 
         self.occurrence_table = DataTable(
             ["Time", "Dir", "Entry", "Regime", "5m", "15m", "30m", "MFE", "MAE"]
         )
         occurrence_card = Card(
-            "Occurrences • double-click a row to open Time Travel"
+            "Occurrences — double-click to open in Time Travel"
         )
         occurrence_card.add_widget(self.occurrence_table)
         root.addWidget(occurrence_card, 2)
@@ -256,7 +267,10 @@ class StrategyLabPage(QWidget):
         if self._snapshot is None:
             self._visible_strategies = ()
             self.strategy_table.set_rows([
-                ["Run analysis to populate Strategy Lab.", 0, "N/A", "N/A", "N/A", "NO DATA"]
+                [
+                    "—", "Run analysis to populate Strategy Lab.", 0, 0, 0,
+                    "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "NO DATA",
+                ]
             ])
             self.occurrence_table.set_rows([])
             return
@@ -268,11 +282,17 @@ class StrategyLabPage(QWidget):
         )
         self.strategy_table.set_rows([
             [
+                strategy.definition.source,
                 strategy.definition.name,
                 strategy.signals,
+                strategy.bullish_signals,
+                strategy.bearish_signals,
                 _fmt_pct(strategy.hit_rate_5m),
                 _fmt_pct(strategy.hit_rate_15m),
                 _fmt_pct(strategy.hit_rate_30m),
+                _fmt(strategy.avg_return_30m),
+                _fmt(strategy.avg_mfe_30m),
+                _fmt(strategy.avg_mae_30m),
                 strategy.sample_label,
             ]
             for strategy in self._visible_strategies

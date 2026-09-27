@@ -232,6 +232,7 @@ def _paperize_phase(
     balance = config.starting_capital
     peak = balance
     max_drawdown = D(0)
+    max_drawdown_pct = D(0)
     rows: list[ArenaTrade] = []
     wins = losses = flats = 0
 
@@ -259,7 +260,13 @@ def _paperize_phase(
                 flats += 1
                 result = "FLAT"
             peak = max(peak, balance)
-            max_drawdown = max(max_drawdown, peak - balance)
+            drawdown = peak - balance
+            max_drawdown = max(max_drawdown, drawdown)
+            if peak > 0:
+                max_drawdown_pct = max(
+                    max_drawdown_pct,
+                    drawdown / peak * D(100),
+                )
 
         rows.append(
             ArenaTrade(
@@ -282,11 +289,7 @@ def _paperize_phase(
 
     net_pnl = balance - config.starting_capital
     return_pct = net_pnl / config.starting_capital * D(100)
-    max_dd_pct = (
-        D(0)
-        if config.starting_capital == 0
-        else max_drawdown / config.starting_capital * D(100)
-    )
+    max_dd_pct = max_drawdown_pct
     summary = PaperAccountSummary(
         starting_capital=config.starting_capital,
         ending_capital=balance,

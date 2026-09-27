@@ -18,7 +18,8 @@ from intrader.historical_reanalysis import reanalyze_stored_decision
 from intrader.historical import Candle, INDIA_TIME, fetch_candles
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
-from intrader.shadow_lab import REPLAY_SESSION_OPTIONS
+from intrader.shadow_arena import ShadowArenaReport, run_shadow_arena
+from intrader.shadow_lab import MAX_REPLAY_SESSION_INPUT, ShadowReplayConfig, validate_replay_config
 from intrader.shadow_replay import ShadowReplayReport, run_candle_proxy_replay
 from intrader.storage import SQLiteStore
 from intrader.strategy_lab import analyze_strategies
@@ -280,8 +281,8 @@ class DesktopDataService:
     ) -> tuple[Candle, ...]:
         """Fetch enough complete NIFTY history for a 30/60/90-session replay."""
 
-        if sessions not in REPLAY_SESSION_OPTIONS:
-            raise ValueError("unsupported Shadow Trader replay range")
+        if sessions < 2 or sessions > MAX_REPLAY_SESSION_INPUT * 2:
+            raise ValueError("Shadow Trader total replay range must be between 2 and 1000 sessions")
         now = now or datetime.now(INDIA_TIME)
         end_day = self._last_completed_market_day(now)
         end = datetime.combine(end_day, time(15, 30), INDIA_TIME)
@@ -358,17 +359,14 @@ class DesktopDataService:
 
     def run_shadow_replay_with_visuals(
         self,
-        sessions: int,
-        mode_key: str,
-    ) -> tuple[ShadowReplayReport, tuple[Candle, ...]]:
-        """Run the replay and return only the selected candles for UI playback."""
+        config: ShadowReplayConfig,
+    ) -> tuple[ShadowArenaReport, tuple[Candle, ...]]:
+        """Run the parallel Shadow Arena and return selected candles for playback."""
 
+        config = validate_replay_config(config)
+        sessions = config.total_sessions
         candles = self.load_shadow_replay_candles(sessions)
-        report = run_candle_proxy_replay(
-            candles,
-            sessions=sessions,
-            mode_key=mode_key,
-        )
+        report = run_shadow_arena(candles, config)
         selected_dates = sorted({
             candle.at.astimezone(INDIA_TIME).date()
             for candle in candles

@@ -8,7 +8,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPicture, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPicture, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGridLayout,
     QHeaderView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 import pyqtgraph as pg
 
 from intrader.historical import INDIA_TIME
+from intrader.ui.theme import ACCENT_PRESETS, DEFAULT_ACCENT
 
 
 BULLISH_COLOR = "#2d8a60"
@@ -32,14 +33,180 @@ TIMEFRAME_MINUTES = {
 }
 
 
+class LogoMark(QWidget):
+    """Vector Intrader mark inspired by the approved geometric N/candlestick logo."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(52, 52)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx = self.width() / 2
+        cy = self.height() / 2
+
+        painter.setPen(QPen(QColor("#D7D4CD"), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(cx, cy), 22, 22)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#D85C5C"))
+        painter.drawRect(QRectF(5, cy - 4, 42, 8))
+
+        painter.setPen(QPen(QColor("#111318"), 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
+        painter.drawLine(QPointF(15, 12), QPointF(15, 40))
+        painter.drawLine(QPointF(15, 13), QPointF(37, 39))
+        painter.drawLine(QPointF(37, 12), QPointF(37, 40))
+
+        painter.setPen(QPen(QColor("#BBB7AF"), 1))
+        painter.drawLine(QPointF(cx, 4), QPointF(cx, 48))
+        painter.drawLine(QPointF(4, cy), QPointF(48, cy))
+
+
+class BrandLockup(QWidget):
+    """Top-left Intrader brand lockup used across all workstation modes."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addWidget(LogoMark())
+        text = QWidget()
+        text_layout = QVBoxLayout(text)
+        text_layout.setContentsMargins(0, 4, 0, 3)
+        text_layout.setSpacing(0)
+        title = QLabel("I N T R A D E R")
+        title.setObjectName("AppTitle")
+        subtitle = QLabel("Market Intelligence")
+        subtitle.setObjectName("BrandSubtitle")
+        text_layout.addWidget(title)
+        text_layout.addWidget(subtitle)
+        layout.addWidget(text)
+
+
+class DotMatrix(QWidget):
+    """Tiny halftone field for the editorial visual language."""
+
+    def __init__(
+        self,
+        accent: str = DEFAULT_ACCENT,
+        *,
+        columns: int = 6,
+        rows: int = 4,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._accent = accent
+        self._columns = columns
+        self._rows = rows
+        self.setFixedSize(max(20, columns * 7), max(16, rows * 7))
+
+    def set_accent(self, accent: str) -> None:
+        self._accent = accent
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor(self._accent)
+        color.setAlpha(150)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        for row in range(self._rows):
+            for column in range(self._columns):
+                opacity = max(45, 155 - (column + row) * 12)
+                dot = QColor(color)
+                dot.setAlpha(opacity)
+                painter.setBrush(dot)
+                painter.drawEllipse(QPointF(4 + column * 7, 4 + row * 7), 1.3, 1.3)
+
+
+class AccentDotButton(QAbstractButton):
+    """Circular matte/pastel accent swatch."""
+
+    def __init__(
+        self,
+        name: str,
+        color: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.name = name
+        self.color = color
+        self._selected = False
+        self.setToolTip(name)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(22, 22)
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = QPointF(self.width() / 2, self.height() / 2)
+        if self._selected:
+            ring = QColor(self.color)
+            ring.setAlpha(55)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(ring)
+            painter.drawEllipse(center, 10, 10)
+            painter.setBrush(QColor("#FBFAF7"))
+            painter.drawEllipse(center, 7, 7)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self.color))
+        painter.drawEllipse(center, 4.7, 4.7)
+
+
+class AccentSelector(QWidget):
+    """Single visual customization control: matte/pastel accent color."""
+
+    accent_changed = Signal(str)
+
+    def __init__(self, current: str = DEFAULT_ACCENT) -> None:
+        super().__init__()
+        self._buttons: list[AccentDotButton] = []
+        self._current = current
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        label = QLabel("Accent")
+        label.setObjectName("Muted")
+        layout.addWidget(label)
+        for name, color in ACCENT_PRESETS:
+            button = AccentDotButton(name, color)
+            button.clicked.connect(
+                lambda _checked=False, value=color: self.set_accent(value)
+            )
+            self._buttons.append(button)
+            layout.addWidget(button)
+        self.set_accent(current, emit=False)
+
+    def set_accent(self, accent: str, *, emit: bool = True) -> None:
+        valid = {color for _name, color in ACCENT_PRESETS}
+        if accent not in valid:
+            accent = DEFAULT_ACCENT
+        self._current = accent
+        for button in self._buttons:
+            button.set_selected(button.color == accent)
+        if emit:
+            self.accent_changed.emit(accent)
+
+    def accent(self) -> str:
+        return self._current
+
+
 class Card(QFrame):
     def __init__(self, title: str | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QColor(38, 59, 70, 20))
+        shadow.setBlurRadius(22)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(30, 34, 38, 18))
         self.setGraphicsEffect(shadow)
         self.layout_box = QVBoxLayout(self)
         self.layout_box.setContentsMargins(14, 12, 14, 14)
@@ -436,8 +603,11 @@ class MarketChart(Card):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 2)
         title_label = QLabel(title)
-        title_label.setObjectName("CardTitle")
+        title_label.setObjectName("SectionTitle")
         header.addWidget(title_label)
+        self.quote_label = QLabel("—")
+        self.quote_label.setObjectName("MetricValue")
+        header.addWidget(self.quote_label)
         header.addStretch(1)
 
         self.timeframe_group = QButtonGroup(self)
@@ -465,8 +635,8 @@ class MarketChart(Card):
         self.plot = pg.PlotWidget(
             axisItems={"bottom": DateAxisItem(orientation="bottom")}
         )
-        self.plot.setBackground("#fffefa")
-        self.plot.showGrid(x=True, y=True, alpha=0.08)
+        self.plot.setBackground("#FEFDFB")
+        self.plot.showGrid(x=True, y=True, alpha=0.06)
         self.plot.getAxis("left").setPen("#9aa1a5")
         self.plot.getAxis("bottom").setPen("#9aa1a5")
         self.plot.setMouseEnabled(x=True, y=True)
@@ -497,6 +667,11 @@ class MarketChart(Card):
         if not self._raw_candles:
             self.set_empty_message("No market data loaded.")
             return
+        last = self._raw_candles[-1]
+        try:
+            self.quote_label.setText(f"{float(last.close):,.2f}")
+        except Exception:
+            self.quote_label.setText(str(last.close))
         self._render_raw_candles()
 
     def _auto_minutes(self) -> int:
@@ -594,6 +769,7 @@ class MarketChart(Card):
     def set_empty_message(self, message: str) -> None:
         self._raw_candles = ()
         self.interval_hint.setText("No data")
+        self.quote_label.setText("—")
         self.plot.clear()
         self.candles.set_data([])
         self.plot.hideAxis("left")

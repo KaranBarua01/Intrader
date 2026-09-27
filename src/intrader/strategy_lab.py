@@ -507,13 +507,17 @@ def analyze_strategies(
     decisions: Sequence[DecisionRecord],
     start: datetime,
     end: datetime,
+    *,
+    max_days: int = 30,
 ) -> StrategyLabSnapshot:
     """Backtest isolated hypotheses on historical NIFTY candles only."""
 
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("strategy analysis range invalid")
-    if end - start > timedelta(days=30, minutes=1):
-        raise ValueError("Strategy Lab is limited to 30 days")
+    if max_days < 1:
+        raise ValueError("strategy analysis range limit invalid")
+    if end - start > timedelta(days=max_days, minutes=1):
+        raise ValueError("Strategy Lab is limited to 30 days" if max_days == 30 else "strategy analysis range exceeds research limit")
 
     ordered = tuple(sorted(
         (

@@ -1,8 +1,8 @@
 """Configuration and immutable planning metadata for Intrader Shadow Trader Lab.
 
-This module intentionally contains no broker execution path.  It defines the
-research protocol that the desktop UI can display while the historical replay
-engine is built incrementally.
+This module intentionally contains no broker execution path. It defines the
+research protocol, selectable replay depth, and feature coverage exposed by the
+desktop Shadow Trader workspace.
 """
 
 from __future__ import annotations
@@ -176,6 +176,63 @@ DATA_COVERAGE: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
+REPLAY_SESSION_OPTIONS: tuple[int, ...] = (30, 60, 90)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayModeSpec:
+    key: str
+    label: str
+    feature_count: int
+    families: tuple[str, ...]
+    description: str
+
+
+REPLAY_MODES: tuple[ReplayModeSpec, ...] = (
+    ReplayModeSpec(
+        key="LOW",
+        label="Low",
+        feature_count=15,
+        families=(
+            "NIFTY price / structure",
+            "Momentum / volatility",
+            "Volatility / macro context",
+        ),
+        description=(
+            "Fastest replay. Core NIFTY price/structure, momentum/volatility and "
+            "macro-volatility context only."
+        ),
+    ),
+    ReplayModeSpec(
+        key="MEDIUM",
+        label="Medium",
+        feature_count=30,
+        families=(
+            "NIFTY price / structure",
+            "Momentum / volatility",
+            "Futures",
+            "SENSEX confirmation",
+            "Breadth / constituents",
+            "Volatility / macro context",
+        ),
+        description=(
+            "Balanced replay. Adds futures, SENSEX confirmation and NIFTY breadth "
+            "to the Low profile."
+        ),
+    ),
+    ReplayModeSpec(
+        key="HIGH",
+        label="High",
+        feature_count=50,
+        families=tuple(family for family, _features in FEATURE_FAMILIES),
+        description=(
+            "All-in replay. Requests all 50 feature touchpoints. Any unavailable "
+            "historical family must be marked missing rather than fabricated."
+        ),
+    ),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ShadowLabPlan:
     historical_sessions: int = 90
@@ -206,5 +263,28 @@ def flattened_features() -> tuple[str, ...]:
     )
 
 
+def replay_mode(key: str) -> ReplayModeSpec:
+    normalized = str(key).strip().upper()
+    for mode in REPLAY_MODES:
+        if mode.key == normalized:
+            return mode
+    raise ValueError(f"unknown Shadow Trader replay mode: {key}")
+
+
+def development_blind_split(sessions: int) -> tuple[int, int]:
+    if sessions not in REPLAY_SESSION_OPTIONS:
+        raise ValueError(f"unsupported Shadow Trader replay range: {sessions}")
+    blind = sessions // 3
+    return sessions - blind, blind
+
+
 if len(flattened_features()) != DEFAULT_SHADOW_LAB_PLAN.feature_count:
     raise RuntimeError("Shadow Trader feature catalog must contain exactly 50 features.")
+
+for _mode in REPLAY_MODES:
+    if sum(
+        len(features)
+        for family, features in FEATURE_FAMILIES
+        if family in _mode.families
+    ) != _mode.feature_count:
+        raise RuntimeError(f"Replay mode {_mode.key} feature count does not match its families.")

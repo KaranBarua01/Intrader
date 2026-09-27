@@ -18,6 +18,8 @@ from intrader.historical_reanalysis import reanalyze_stored_decision
 from intrader.historical import Candle, INDIA_TIME, fetch_candles
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
+from intrader.shadow_lab import REPLAY_SESSION_OPTIONS
+from intrader.shadow_replay import ShadowReplayReport, run_candle_proxy_replay
 from intrader.storage import SQLiteStore
 from intrader.strategy_lab import analyze_strategies
 from intrader.ui.paths import database_path as default_database_path
@@ -259,6 +261,74 @@ class DesktopDataService:
                 start=start,
                 end=end,
             )
+
+    @staticmethod
+    def _last_completed_market_day(now: datetime) -> date:
+        local = now.astimezone(INDIA_TIME)
+        candidate = local.date()
+        if candidate.weekday() >= 5 or local.time() < time(15, 30):
+            candidate -= timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+        return candidate
+
+    def load_shadow_replay_candles(
+        self,
+        sessions: int,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[Candle, ...]:
+        """Fetch enough complete NIFTY history for a 30/60/90-session replay."""
+
+        if sessions not in REPLAY_SESSION_OPTIONS:
+            raise ValueError("unsupported Shadow Trader replay range")
+        now = now or datetime.now(INDIA_TIME)
+        end_day = self._last_completed_market_day(now)
+        end = datetime.combine(end_day, time(15, 30), INDIA_TIME)
+
+        # Generous calendar lookback covers weekends and exchange holidays while
+        # keeping each Angel request inside the 30-day one-minute limit.
+        start_day = end_day - timedelta(days=sessions * 2 + 35)
+        start = datetime.combine(start_day, time(9, 15), INDIA_TIME)
+
+        merged: dict[datetime, Candle] = {}
+        cursor = start
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(days=27), end)
+            rows = self.load_nifty_candle_range(
+                cursor,
+                chunk_end,
+                backfill_missing=True,
+            )
+            for candle in rows:
+                merged[candle.at] = candle
+            cursor = chunk_end
+
+        ordered = tuple(sorted(merged.values(), key=lambda item: item.at))
+        session_dates = {
+            candle.at.astimezone(INDIA_TIME).date()
+            for candle in ordered
+        }
+        if len(session_dates) < sessions:
+            raise ValueError(
+                f"only {len(session_dates)} historical NIFTY sessions are available; "
+                f"{sessions} were requested"
+            )
+        return ordered
+
+    def run_shadow_replay(
+        self,
+        sessions: int,
+        mode_key: str,
+    ) -> ShadowReplayReport:
+        """Run the current safe historical candle-proxy replay."""
+
+        candles = self.load_shadow_replay_candles(sessions)
+        return run_candle_proxy_replay(
+            candles,
+            sessions=sessions,
+            mode_key=mode_key,
+        )
 
     def analyze_time_range(
         self,

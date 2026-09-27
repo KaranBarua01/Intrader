@@ -128,3 +128,10 @@ def test_transport_error_is_sanitized() -> None:
         authenticate(_stored_credentials(), transport)
 
     assert "dummy-api-key" not in str(error.value)
+
+
+def test_transport_smartapi_error_keeps_specific_network_reason() -> None:
+    transport = FakeTransport(error=SmartAPIError("SmartAPI network request failed"))
+
+    with pytest.raises(SmartAPIError, match="SmartAPI network request failed"):
+        authenticate(_stored_credentials(), transport)

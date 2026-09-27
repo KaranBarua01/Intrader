@@ -11,7 +11,8 @@ from types import SimpleNamespace
 from PySide6.QtWidgets import QApplication
 
 from intrader.ui.components import (
-    BEARISH_COLOR, BULLISH_COLOR, MarketChart, TriangleDockButton,
+    BEARISH_COLOR, BULLISH_COLOR, LOGO_GREY, LOGO_RED, LogoMark,
+    MarketChart, TriangleDockButton,
 )
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.strategy_lab_page import StrategyLabPage
@@ -260,3 +261,13 @@ def test_intrader_mode_uses_one_screen_workstation_sections() -> None:
     assert set(page.interpretation_values) == {
         "PRICE", "FUTURES", "OPTIONS", "BREADTH", "ORDER_FLOW"
     }
+
+
+
+def test_logo_colors_are_fixed_and_not_accent_driven() -> None:
+    app = QApplication.instance() or QApplication([])
+    mark = LogoMark()
+
+    assert LOGO_RED == "#FF1018"
+    assert LOGO_GREY == "#666666"
+    assert not hasattr(mark, "set_accent")

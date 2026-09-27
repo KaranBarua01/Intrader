@@ -1,9 +1,9 @@
 """Timestamp-causal historical Shadow Trader replay.
 
-Version 1 is an Angel-One candle proxy. It deliberately avoids pretending that
-expired option premiums exist when they are unavailable. The engine selects a
-candle strategy on the development segment and evaluates the frozen choice on
-the blind segment.
+Version 2 is an Angel-One NIFTY candle proxy. It deliberately avoids pretending
+that expired option premiums exist when they are unavailable. The engine chooses
+a strategy using only the development segment, freezes it, and then evaluates
+that unchanged strategy on the blind segment.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from intrader.historical import Candle, INDIA_TIME
 from intrader.shadow_lab import development_blind_split, replay_mode
 from intrader.strategy_lab import (
     StrategyLabSnapshot,
+    StrategyOccurrence,
     StrategyPerformance,
     analyze_strategies,
 )
@@ -35,6 +36,12 @@ class ReplayMetrics:
     win_rate_pct: Decimal | None
     average_return_30m_pct: Decimal | None
     total_signed_return_30m_pct: Decimal
+    average_winner_pct: Decimal | None
+    average_loser_pct: Decimal | None
+    profit_factor: Decimal | None
+    max_drawdown_pct_points: Decimal
+    max_winning_streak: int
+    max_losing_streak: int
     average_mfe_30m_pct: Decimal | None
     average_mae_30m_pct: Decimal | None
 
@@ -47,6 +54,22 @@ class ReplayCandidate:
     hit_rate_30m_pct: Decimal | None
     average_return_30m_pct: Decimal | None
     sample_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayTradeResult:
+    phase: str
+    at: str
+    direction: str
+    entry_underlying: Decimal
+    approx_exit_underlying_30m: Decimal | None
+    return_5m_pct: Decimal | None
+    return_15m_pct: Decimal | None
+    return_30m_pct: Decimal | None
+    mfe_30m_pct: Decimal | None
+    mae_30m_pct: Decimal | None
+    result: str
+    regime: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +86,7 @@ class ShadowReplayReport:
     development: ReplayMetrics
     blind: ReplayMetrics
     candidates: tuple[ReplayCandidate, ...]
+    trades: tuple[ReplayTradeResult, ...]
     first_session: str | None
     last_session: str | None
     notes: tuple[str, ...]
@@ -72,6 +96,34 @@ def _average(values: Sequence[Decimal]) -> Decimal | None:
     if not values:
         return None
     return sum(values, D(0)) / D(len(values))
+
+
+def _streaks(values: Sequence[Decimal]) -> tuple[int, int]:
+    current_win = current_loss = 0
+    max_win = max_loss = 0
+    for value in values:
+        if value > 0:
+            current_win += 1
+            current_loss = 0
+            max_win = max(max_win, current_win)
+        elif value < 0:
+            current_loss += 1
+            current_win = 0
+            max_loss = max(max_loss, current_loss)
+        else:
+            current_win = current_loss = 0
+    return max_win, max_loss
+
+
+def _max_drawdown(values: Sequence[Decimal]) -> Decimal:
+    cumulative = D(0)
+    peak = D(0)
+    max_drawdown = D(0)
+    for value in values:
+        cumulative += value
+        peak = max(peak, cumulative)
+        max_drawdown = max(max_drawdown, peak - cumulative)
+    return max_drawdown
 
 
 def _metrics(performance: StrategyPerformance | None, sessions: int) -> ReplayMetrics:
@@ -86,25 +138,39 @@ def _metrics(performance: StrategyPerformance | None, sessions: int) -> ReplayMe
             win_rate_pct=None,
             average_return_30m_pct=None,
             total_signed_return_30m_pct=D(0),
+            average_winner_pct=None,
+            average_loser_pct=None,
+            profit_factor=None,
+            max_drawdown_pct_points=D(0),
+            max_winning_streak=0,
+            max_losing_streak=0,
             average_mfe_30m_pct=None,
             average_mae_30m_pct=None,
         )
 
     returns = [
-        item.return_30m for item in performance.occurrences
+        item.return_30m
+        for item in performance.occurrences
         if item.return_30m is not None
     ]
     mfes = [
-        item.mfe_30m for item in performance.occurrences
+        item.mfe_30m
+        for item in performance.occurrences
         if item.mfe_30m is not None
     ]
     maes = [
-        item.mae_30m for item in performance.occurrences
+        item.mae_30m
+        for item in performance.occurrences
         if item.mae_30m is not None
     ]
-    wins = sum(1 for value in returns if value > 0)
-    losses = sum(1 for value in returns if value < 0)
+    winning_returns = [value for value in returns if value > 0]
+    losing_returns = [value for value in returns if value < 0]
+    wins = len(winning_returns)
+    losses = len(losing_returns)
     flats = sum(1 for value in returns if value == 0)
+    gross_positive = sum(winning_returns, D(0))
+    gross_negative = abs(sum(losing_returns, D(0)))
+    max_win_streak, max_loss_streak = _streaks(returns)
     return ReplayMetrics(
         sessions=sessions,
         signals=performance.signals,
@@ -119,6 +185,14 @@ def _metrics(performance: StrategyPerformance | None, sessions: int) -> ReplayMe
         ),
         average_return_30m_pct=_average(returns),
         total_signed_return_30m_pct=sum(returns, D(0)),
+        average_winner_pct=_average(winning_returns),
+        average_loser_pct=_average(losing_returns),
+        profit_factor=(
+            None if gross_negative == 0 else gross_positive / gross_negative
+        ),
+        max_drawdown_pct_points=_max_drawdown(returns),
+        max_winning_streak=max_win_streak,
+        max_losing_streak=max_loss_streak,
         average_mfe_30m_pct=_average(mfes),
         average_mae_30m_pct=_average(maes),
     )
@@ -199,6 +273,45 @@ def _slice_sessions(
     return selected, tuple(selected_dates)
 
 
+def _approx_exit(occurrence: StrategyOccurrence) -> Decimal | None:
+    result = occurrence.return_30m
+    if result is None:
+        return None
+    multiplier = (
+        D(1) + result / D(100)
+        if occurrence.direction > 0
+        else D(1) - result / D(100)
+    )
+    return occurrence.entry_price * multiplier
+
+
+def _trade(phase: str, occurrence: StrategyOccurrence) -> ReplayTradeResult:
+    result = occurrence.return_30m
+    outcome = (
+        "UNEVALUATED"
+        if result is None
+        else "WIN"
+        if result > 0
+        else "LOSS"
+        if result < 0
+        else "FLAT"
+    )
+    return ReplayTradeResult(
+        phase=phase,
+        at=occurrence.at.astimezone(INDIA_TIME).isoformat(),
+        direction="CALL / LONG" if occurrence.direction > 0 else "PUT / SHORT",
+        entry_underlying=occurrence.entry_price,
+        approx_exit_underlying_30m=_approx_exit(occurrence),
+        return_5m_pct=occurrence.return_5m,
+        return_15m_pct=occurrence.return_15m,
+        return_30m_pct=occurrence.return_30m,
+        mfe_30m_pct=occurrence.mfe_30m,
+        mae_30m_pct=occurrence.mae_30m,
+        result=outcome,
+        regime=occurrence.regime,
+    )
+
+
 def run_candle_proxy_replay(
     candles: Sequence[Candle],
     *,
@@ -229,11 +342,13 @@ def run_candle_proxy_replay(
     development_set = set(development_dates)
     blind_set = set(blind_dates)
     development_candles = tuple(
-        candle for candle in selected
+        candle
+        for candle in selected
         if candle.at.astimezone(INDIA_TIME).date() in development_set
     )
     blind_candles = tuple(
-        candle for candle in selected
+        candle
+        for candle in selected
         if candle.at.astimezone(INDIA_TIME).date() in blind_set
     )
     if not development_candles or not blind_candles:
@@ -270,9 +385,17 @@ def run_candle_proxy_replay(
         for item in development_snapshot.strategies
         if item.definition.direction_scope != "PROCESS"
     )
+    trades = tuple(
+        [_trade("DEVELOPMENT", occurrence) for occurrence in (
+            () if selected_strategy is None else selected_strategy.occurrences
+        )]
+        + [_trade("BLIND", occurrence) for occurrence in (
+            () if blind_performance is None else blind_performance.occurrences
+        )]
+    )
 
     return ShadowReplayReport(
-        schema="intrader-shadow-replay-v1-candle-proxy",
+        schema="intrader-shadow-replay-v2-results",
         mode=mode.key,
         requested_touchpoints=mode.feature_count,
         requested_sessions=sessions,
@@ -288,12 +411,14 @@ def run_candle_proxy_replay(
         development=_metrics(selected_strategy, development_target),
         blind=_metrics(blind_performance, blind_target),
         candidates=candidates,
+        trades=trades,
         first_session=dates[0].isoformat() if dates else None,
         last_session=dates[-1].isoformat() if dates else None,
         notes=(
-            "Version 1 is a NIFTY candle-direction proxy, not exact historical option P&L.",
+            "Version 2 is a NIFTY candle-direction proxy, not exact historical option P&L.",
             "The selected strategy is chosen only from the development segment and frozen for the blind segment.",
-            "Forward 30-minute returns are evaluation outputs and are never available to the strategy at decision time.",
+            "Forward 5/15/30-minute returns are evaluation outputs and are never available to the strategy at decision time.",
+            "Profit factor and drawdown currently use signed underlying percentage returns, not rupee option P&L.",
             "Replay mode records the requested touchpoint profile. Extra market families are added as their historical feeds are integrated.",
             "Expired NIFTY option premiums remain unavailable until a supported historical source is connected.",
         ),

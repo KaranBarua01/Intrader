@@ -327,75 +327,6 @@ class IntraderModePage(QWidget):
         self.main_splitter.setStretchFactor(1, 36)
         root.addWidget(self.main_splitter, 1)
 
-    def _show_replay(self) -> None:
-        self._session_mode = False
-        self.tabs.setCurrentIndex(0)
-
-    def _show_range(self) -> None:
-        self._session_mode = False
-        self.session_guidance.hide()
-        self.tabs.setCurrentIndex(1)
-
-    def set_range_inputs(self, start: datetime, end: datetime) -> None:
-        start = start.astimezone(INDIA_TIME)
-        end = end.astimezone(INDIA_TIME)
-        self.range_from_day.setDate(
-            QDate(start.year, start.month, start.day)
-        )
-        self.range_from_time.setTime(QTime(start.hour, start.minute))
-        self.range_to_day.setDate(
-            QDate(end.year, end.month, end.day)
-        )
-        self.range_to_time.setTime(QTime(end.hour, end.minute))
-
-    def _set_session_guidance(self, decision, analysis) -> None:
-        self.session_guidance.show()
-        if decision is None:
-            self.session_action.setText("WAIT")
-            self.session_action.setObjectName("HeroValue")
-            for key in ("REGIME", "DIRECTION", "CONFIDENCE", "ENTRY", "RISK"):
-                self.session_guidance_metrics.set_metric(key, "N/A")
-            self.session_guidance_text.setText(
-                "No complete Market Brain decision was recorded in this session. "
-                "Candles and news are descriptive only, so Intrader will not invent "
-                "a CALL/PUT recommendation."
-            )
-        else:
-            tone = (
-                "positive" if decision.action == "BUY_CALL"
-                else "negative" if decision.action == "BUY_PUT"
-                else "neutral"
-            )
-            self.session_action.setText(decision.action.replace("_", " "))
-            self.session_action.setObjectName(
-                "Positive" if tone == "positive"
-                else "Negative" if tone == "negative"
-                else "HeroValue"
-            )
-            self.session_action.style().unpolish(self.session_action)
-            self.session_action.style().polish(self.session_action)
-            self.session_guidance_metrics.set_metric("REGIME", decision.regime)
-            self.session_guidance_metrics.set_metric(
-                "DIRECTION", str(decision.direction_score), _tone(decision.direction_score)
-            )
-            self.session_guidance_metrics.set_metric(
-                "CONFIDENCE", f"{decision.confidence}%"
-            )
-            self.session_guidance_metrics.set_metric(
-                "ENTRY", str(decision.entry_quality)
-            )
-            self.session_guidance_metrics.set_metric(
-                "RISK",
-                str(decision.reversal_risk),
-                "negative" if decision.reversal_risk > 70 else "neutral",
-            )
-            self.session_guidance_text.setText(
-                f"Latest verified Brain decision at "
-                f"{decision.decided_at.astimezone(INDIA_TIME):%H:%M}. "
-                f"Family coverage {decision.family_coverage}%. "
-                "This remains advisory/shadow guidance; real execution is manual."
-            )
-
     def resizeEvent(self, event) -> None:
         self.main_splitter.setOrientation(
             Qt.Orientation.Vertical
@@ -863,6 +794,75 @@ class TimeTravelPage(QWidget):
         range_root.addWidget(bottom_splitter, 2)
 
         self.tabs.addTab(range_tab, "Range Analysis / Opening Possibilities")
+
+    def _show_replay(self) -> None:
+        self._session_mode = False
+        self.tabs.setCurrentIndex(0)
+
+    def _show_range(self) -> None:
+        self._session_mode = False
+        self.session_guidance.hide()
+        self.tabs.setCurrentIndex(1)
+
+    def set_range_inputs(self, start: datetime, end: datetime) -> None:
+        start = start.astimezone(INDIA_TIME)
+        end = end.astimezone(INDIA_TIME)
+        self.range_from_day.setDate(
+            QDate(start.year, start.month, start.day)
+        )
+        self.range_from_time.setTime(QTime(start.hour, start.minute))
+        self.range_to_day.setDate(
+            QDate(end.year, end.month, end.day)
+        )
+        self.range_to_time.setTime(QTime(end.hour, end.minute))
+
+    def _set_session_guidance(self, decision, analysis) -> None:
+        self.session_guidance.show()
+        if decision is None:
+            self.session_action.setText("WAIT")
+            self.session_action.setObjectName("HeroValue")
+            for key in ("REGIME", "DIRECTION", "CONFIDENCE", "ENTRY", "RISK"):
+                self.session_guidance_metrics.set_metric(key, "N/A")
+            self.session_guidance_text.setText(
+                "No complete Market Brain decision was recorded in this session. "
+                "Candles and news are descriptive only, so Intrader will not invent "
+                "a CALL/PUT recommendation."
+            )
+        else:
+            tone = (
+                "positive" if decision.action == "BUY_CALL"
+                else "negative" if decision.action == "BUY_PUT"
+                else "neutral"
+            )
+            self.session_action.setText(decision.action.replace("_", " "))
+            self.session_action.setObjectName(
+                "Positive" if tone == "positive"
+                else "Negative" if tone == "negative"
+                else "HeroValue"
+            )
+            self.session_action.style().unpolish(self.session_action)
+            self.session_action.style().polish(self.session_action)
+            self.session_guidance_metrics.set_metric("REGIME", decision.regime)
+            self.session_guidance_metrics.set_metric(
+                "DIRECTION", str(decision.direction_score), _tone(decision.direction_score)
+            )
+            self.session_guidance_metrics.set_metric(
+                "CONFIDENCE", f"{decision.confidence}%"
+            )
+            self.session_guidance_metrics.set_metric(
+                "ENTRY", str(decision.entry_quality)
+            )
+            self.session_guidance_metrics.set_metric(
+                "RISK",
+                str(decision.reversal_risk),
+                "negative" if decision.reversal_risk > 70 else "neutral",
+            )
+            self.session_guidance_text.setText(
+                f"Latest verified Brain decision at "
+                f"{decision.decided_at.astimezone(INDIA_TIME):%H:%M}. "
+                f"Family coverage {decision.family_coverage}%. "
+                "This remains advisory/shadow guidance; real execution is manual."
+            )
 
     def resizeEvent(self, event) -> None:
         orientation = (

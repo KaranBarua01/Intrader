@@ -82,3 +82,18 @@ def test_shadow_trader_is_a_primary_navigation_tab(monkeypatch) -> None:
 
     assert window.stack.currentWidget() is window._pages["Shadow Trader"]
     assert window._nav_buttons["Shadow Trader"].property("active") is True
+
+
+def test_shadow_trader_replay_controls_are_present(monkeypatch) -> None:
+    app, window = _window(monkeypatch)
+    page = window.shadow_page
+    app.processEvents()
+
+    assert [page.replay_range.itemData(i) for i in range(page.replay_range.count())] == [30, 60, 90]
+    assert [page.replay_mode.itemData(i) for i in range(page.replay_mode.count())] == [
+        "LOW", "MEDIUM", "HIGH"
+    ]
+    assert page.selected_replay_sessions() == 90
+    assert page.selected_replay_mode() == "MEDIUM"
+    assert page.replay_start_button.text().startswith("▶")
+    assert "Export Results" in page.replay_export_button.text()

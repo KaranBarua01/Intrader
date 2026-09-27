@@ -36,16 +36,12 @@ class ShadowTraderPage(QWidget):
     """Research, historical replay, and forward-validation workspace."""
 
     replay_requested = Signal(int, str)
-    replay_pause_requested = Signal()
-    replay_resume_requested = Signal()
-    replay_stop_requested = Signal()
     replay_export_requested = Signal(int, str)
 
     def __init__(self) -> None:
         super().__init__()
         self.plan = DEFAULT_SHADOW_LAB_PLAN
         self._replay_running = False
-        self._replay_paused = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 34)
@@ -168,15 +164,9 @@ class ShadowTraderPage(QWidget):
         buttons = QHBoxLayout()
         self.replay_start_button = QPushButton("▶  Start Replay")
         self.replay_start_button.setObjectName("PrimaryButton")
-        self.replay_pause_button = QPushButton("Ⅱ  Pause")
-        self.replay_stop_button = QPushButton("■  Stop")
         self.replay_export_button = QPushButton("↓  Export Results")
         self.replay_export_button.setObjectName("SecondaryButton")
-        self.replay_pause_button.setEnabled(False)
-        self.replay_stop_button.setEnabled(False)
         buttons.addWidget(self.replay_start_button)
-        buttons.addWidget(self.replay_pause_button)
-        buttons.addWidget(self.replay_stop_button)
         buttons.addStretch(1)
         buttons.addWidget(self.replay_export_button)
         controls.add_layout(buttons)
@@ -226,8 +216,6 @@ class ShadowTraderPage(QWidget):
         self.replay_range.currentIndexChanged.connect(self._sync_replay_controls)
         self.replay_mode.currentIndexChanged.connect(self._sync_replay_controls)
         self.replay_start_button.clicked.connect(self._request_replay)
-        self.replay_pause_button.clicked.connect(self._toggle_pause)
-        self.replay_stop_button.clicked.connect(self._request_stop)
         self.replay_export_button.clicked.connect(self._request_export)
         self._sync_replay_controls()
         return page
@@ -366,13 +354,9 @@ class ShadowTraderPage(QWidget):
         if self._replay_running:
             return
         self._replay_running = True
-        self._replay_paused = False
         self.replay_start_button.setEnabled(False)
         self.replay_range.setEnabled(False)
         self.replay_mode.setEnabled(False)
-        self.replay_pause_button.setEnabled(True)
-        self.replay_pause_button.setText("Ⅱ  Pause")
-        self.replay_stop_button.setEnabled(True)
         self.replay_export_button.setEnabled(False)
         self.replay_status.setText(
             "STARTING — preparing timestamp-causal historical data and replay state…"
@@ -381,26 +365,6 @@ class ShadowTraderPage(QWidget):
             self.selected_replay_sessions(),
             self.selected_replay_mode(),
         )
-
-    def _toggle_pause(self) -> None:
-        if not self._replay_running:
-            return
-        self._replay_paused = not self._replay_paused
-        if self._replay_paused:
-            self.replay_pause_button.setText("▶  Resume")
-            self.replay_status.setText("PAUSED — replay state is frozen at the current simulated timestamp.")
-            self.replay_pause_requested.emit()
-        else:
-            self.replay_pause_button.setText("Ⅱ  Pause")
-            self.replay_status.setText("RUNNING — historical shadow replay resumed.")
-            self.replay_resume_requested.emit()
-
-    def _request_stop(self) -> None:
-        if not self._replay_running:
-            return
-        self.replay_status.setText("STOPPING — finishing the current safe replay step…")
-        self.replay_stop_button.setEnabled(False)
-        self.replay_stop_requested.emit()
 
     def _request_export(self) -> None:
         self.replay_export_requested.emit(
@@ -423,13 +387,9 @@ class ShadowTraderPage(QWidget):
 
     def set_replay_finished(self, status: str) -> None:
         self._replay_running = False
-        self._replay_paused = False
         self.replay_start_button.setEnabled(True)
         self.replay_range.setEnabled(True)
         self.replay_mode.setEnabled(True)
-        self.replay_pause_button.setEnabled(False)
-        self.replay_pause_button.setText("Ⅱ  Pause")
-        self.replay_stop_button.setEnabled(False)
         self.replay_export_button.setEnabled(True)
         self.replay_status.setText(status)
 

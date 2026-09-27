@@ -279,9 +279,11 @@ def test_market_chart_limits_vertical_zoom_to_five_points() -> None:
     app = QApplication.instance() or QApplication([])
     chart = MarketChart()
 
-    limits = chart.plot.getViewBox().state["limits"]
+    chart.plot.setYRange(100.0, 101.0, padding=0)
+    app.processEvents()
+    low, high = chart.plot.viewRange()[1]
 
-    assert limits["minYRange"] == 5.0
+    assert high - low >= 4.999
 
 
 def test_daily_candle_aggregation_keeps_one_candle_per_session() -> None:

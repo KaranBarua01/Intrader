@@ -180,6 +180,14 @@ DATA_COVERAGE: tuple[tuple[str, str, str, str], ...] = (
 REPLAY_SESSION_OPTIONS: tuple[int, ...] = (30, 60, 90, 250)
 MAX_REPLAY_SESSION_INPUT = 500
 DEFAULT_TRADER_TIMEFRAMES: tuple[int, ...] = (1, 5, 10, 15)
+VALIDATION_MODES: tuple[str, ...] = ("STANDARD", "WALK_FORWARD")
+EXECUTION_MODES: tuple[str, ...] = ("PROXY", "OPTION_PREMIUM")
+TRADER_HOLD_MINUTES: tuple[tuple[int, int], ...] = (
+    (1, 10),
+    (5, 30),
+    (10, 45),
+    (15, 60),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +250,12 @@ class ShadowReplayConfig:
     development_sessions: int = 60
     blind_sessions: int = 30
     mode_key: str = "MEDIUM"
+    validation_mode: str = "STANDARD"
+    walk_train_sessions: int = 60
+    walk_test_sessions: int = 15
+    walk_step_sessions: int = 15
+    walk_windows: int = 4
+    execution_mode: str = "PROXY"
     starting_capital: Decimal = Decimal("50000")
     allocation_pct: Decimal = Decimal("25")
     friction_bps: Decimal = Decimal("5")
@@ -258,6 +272,20 @@ def validate_replay_config(config: ShadowReplayConfig) -> ShadowReplayConfig:
     if not 1 <= int(config.blind_sessions) <= MAX_REPLAY_SESSION_INPUT:
         raise ValueError("blind sessions must be between 1 and 500")
     replay_mode(config.mode_key)
+    validation_mode = str(config.validation_mode).strip().upper()
+    if validation_mode not in VALIDATION_MODES:
+        raise ValueError("validation mode must be STANDARD or WALK_FORWARD")
+    execution_mode = str(config.execution_mode).strip().upper()
+    if execution_mode not in EXECUTION_MODES:
+        raise ValueError("execution mode must be PROXY or OPTION_PREMIUM")
+    if not 1 <= int(config.walk_train_sessions) <= MAX_REPLAY_SESSION_INPUT:
+        raise ValueError("walk-forward train sessions must be between 1 and 500")
+    if not 1 <= int(config.walk_test_sessions) <= MAX_REPLAY_SESSION_INPUT:
+        raise ValueError("walk-forward test sessions must be between 1 and 500")
+    if not 1 <= int(config.walk_step_sessions) <= MAX_REPLAY_SESSION_INPUT:
+        raise ValueError("walk-forward step sessions must be between 1 and 500")
+    if not 1 <= int(config.walk_windows) <= 20:
+        raise ValueError("walk-forward windows must be between 1 and 20")
     if config.starting_capital <= 0:
         raise ValueError("starting capital must be positive")
     if not Decimal("1") <= config.allocation_pct <= Decimal("100"):
@@ -271,6 +299,12 @@ def validate_replay_config(config: ShadowReplayConfig) -> ShadowReplayConfig:
         development_sessions=int(config.development_sessions),
         blind_sessions=int(config.blind_sessions),
         mode_key=str(config.mode_key).upper(),
+        validation_mode=validation_mode,
+        walk_train_sessions=int(config.walk_train_sessions),
+        walk_test_sessions=int(config.walk_test_sessions),
+        walk_step_sessions=int(config.walk_step_sessions),
+        walk_windows=int(config.walk_windows),
+        execution_mode=execution_mode,
         starting_capital=Decimal(config.starting_capital),
         allocation_pct=Decimal(config.allocation_pct),
         friction_bps=Decimal(config.friction_bps),

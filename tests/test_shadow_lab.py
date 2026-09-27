@@ -72,6 +72,9 @@ def test_replay_presets_remain_but_custom_splits_are_supported() -> None:
         )
     )
     assert config.total_sessions == 2
+    assert config.required_sessions == 2
+    assert config.validation_mode == "STANDARD"
+    assert config.execution_mode == "PROXY"
     assert config.trader_timeframes == DEFAULT_TRADER_TIMEFRAMES
 
 
@@ -80,3 +83,27 @@ def test_low_medium_high_touchpoints_are_monotonic() -> None:
     assert replay_mode("LOW").feature_count == 15
     assert replay_mode("MEDIUM").feature_count == 30
     assert replay_mode("HIGH").feature_count == 50
+
+
+def test_walk_forward_required_sessions_are_calculated() -> None:
+    config = validate_replay_config(
+        ShadowReplayConfig(
+            development_sessions=60,
+            blind_sessions=30,
+            validation_mode="WALK_FORWARD",
+            walk_train_sessions=100,
+            walk_test_sessions=25,
+            walk_step_sessions=25,
+            walk_windows=4,
+        )
+    )
+
+    assert config.walk_required_sessions == 200
+    assert config.required_sessions == 200
+
+
+def test_option_execution_mode_is_valid_configuration_but_requires_adapter_data() -> None:
+    config = validate_replay_config(
+        ShadowReplayConfig(execution_mode="OPTION_PREMIUM")
+    )
+    assert config.execution_mode == "OPTION_PREMIUM"

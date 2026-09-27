@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
         self._page_widgets: dict[str, QWidget] = {}
         self._dock_visible = False
         self._build_ui()
+        self.apply_accent(self.current_accent)
         saved_geometry = self.settings.value("geometry")
         if saved_geometry is not None:
             self.restoreGeometry(saved_geometry)

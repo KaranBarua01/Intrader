@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from intrader.auth import RequestsTransport, authenticate
@@ -27,6 +28,11 @@ from intrader.shadow_lab import (
     validate_replay_config,
 )
 from intrader.shadow_replay import ShadowReplayReport, run_candle_proxy_replay
+from intrader.shadow_stream_engine import (
+    FeatureEvent,
+    HistoricalFeatureTimeline,
+    RiskWindow,
+)
 from intrader.storage import SQLiteStore
 from intrader.strategy_lab import analyze_strategies
 from intrader.ui.paths import database_path as default_database_path
@@ -363,16 +369,28 @@ class DesktopDataService:
             mode_key=mode_key,
         )
 
-    def _shadow_feature_coverage(
+    @staticmethod
+    def _clip_score(value: Decimal) -> Decimal:
+        return max(Decimal("-1"), min(Decimal("1"), value))
+
+    def _build_shadow_feature_timeline(
         self,
         start: datetime,
         end: datetime,
+        candles: tuple[Candle, ...],
         mode_key: str,
-    ) -> FeatureCoverageAudit:
-        """Report requested, stored and decision-used historical feature families."""
+    ) -> tuple[HistoricalFeatureTimeline, FeatureCoverageAudit]:
+        """Build causal historical feature events from data genuinely stored locally."""
 
         mode = replay_mode(mode_key)
-        with SQLiteStore(self.database_path) as store:
+        feature_sizes = {
+            family: len(features)
+            for family, features in FEATURE_FAMILIES
+        }
+        events: list[FeatureEvent] = []
+        risk_windows: list[RiskWindow] = []
+
+        with SQLiteStore(self.database_path, read_only=True) as store:
             counts = {
                 "candles": store.count_time_range_rows(
                     "candles", start=start, end=end
@@ -397,6 +415,178 @@ class DesktopDataService:
                 ),
             }
 
+            # Futures: price/OI/depth confirmation. Multiple expiry tokens are
+            # handled independently; only prior observations for the same token
+            # are used, so expiry rollover cannot leak information.
+            for token in store.distinct_snapshot_tokens(
+                "future_snapshots", start=start, end=end
+            ):
+                rows = store.load_future_snapshots(token, start=start, end=end)
+                previous = None
+                for row in rows:
+                    if previous is None:
+                        previous = row
+                        continue
+                    if row.volume < previous.volume:
+                        previous = row
+                        continue
+                    price_base = previous.ltp if previous.ltp > 0 else row.ltp
+                    price_change = (
+                        (row.ltp - previous.ltp) / price_base * Decimal(100)
+                        if price_base > 0 else Decimal(0)
+                    )
+                    price_score = self._clip_score(
+                        price_change / Decimal("0.15")
+                    )
+                    oi_change = row.open_interest - previous.open_interest
+                    oi_sign = (
+                        Decimal(1) if oi_change > 0
+                        else Decimal("-1") if oi_change < 0
+                        else Decimal(0)
+                    )
+                    depth_total = row.depth_buy_quantity + row.depth_sell_quantity
+                    depth = (
+                        Decimal(0)
+                        if depth_total == 0
+                        else Decimal(
+                            row.depth_buy_quantity - row.depth_sell_quantity
+                        ) / Decimal(depth_total)
+                    )
+                    # OI strengthens the current price direction but does not
+                    # invent direction by itself.
+                    score = self._clip_score(
+                        price_score * Decimal("0.75")
+                        + depth * Decimal("0.25")
+                    )
+                    if oi_sign < 0:
+                        score *= Decimal("0.75")
+                    events.append(
+                        FeatureEvent(
+                            at=row.exchange_at,
+                            family="Futures",
+                            score=score,
+                            label=(
+                                f"Futures price/OI/depth: Δpx={price_change:.3f}% "
+                                f"ΔOI={oi_change} depth={depth:.2f}"
+                            ),
+                        )
+                    )
+                    previous = row
+
+            # Breadth: equal-weight advance/decline state for the latest stored
+            # constituent observations in each minute.
+            breadth_rows = store.load_breadth_snapshots(start=start, end=end)
+            breadth_by_minute: dict[datetime, list] = {}
+            for row in breadth_rows:
+                minute = row.exchange_at.replace(second=0, microsecond=0)
+                breadth_by_minute.setdefault(minute, []).append(row)
+            for at, rows in breadth_by_minute.items():
+                latest: dict[str, object] = {}
+                for row in rows:
+                    latest[row.symbol] = row
+                members = list(latest.values())
+                if not members:
+                    continue
+                advancing = sum(
+                    1 for row in members
+                    if row.current_price > row.previous_close
+                )
+                declining = sum(
+                    1 for row in members
+                    if row.current_price < row.previous_close
+                )
+                score = Decimal(advancing - declining) / Decimal(len(members))
+                events.append(
+                    FeatureEvent(
+                        at=at,
+                        family="Breadth / constituents",
+                        score=self._clip_score(score),
+                        label=(
+                            f"Breadth {advancing} advancing / "
+                            f"{declining} declining / {len(members)} tracked"
+                        ),
+                    )
+                )
+
+            # Options: when historical snapshots genuinely exist, use the
+            # same-timestamp put/call OI and volume balance as confirmation.
+            option_rows = store.load_option_snapshots(start=start, end=end)
+            options_by_minute: dict[datetime, dict[str, object]] = {}
+            for row in option_rows:
+                minute = row.exchange_at.replace(second=0, microsecond=0)
+                options_by_minute.setdefault(minute, {})[row.token] = row
+            for at, by_token in options_by_minute.items():
+                rows = list(by_token.values())
+                calls = [row for row in rows if row.option_type == "CE"]
+                puts = [row for row in rows if row.option_type == "PE"]
+                call_oi = sum(row.open_interest for row in calls)
+                put_oi = sum(row.open_interest for row in puts)
+                call_volume = sum(row.volume for row in calls)
+                put_volume = sum(row.volume for row in puts)
+                if call_oi <= 0 or put_oi <= 0:
+                    continue
+                oi_pcr = Decimal(put_oi) / Decimal(call_oi)
+                volume_pcr = (
+                    None
+                    if call_volume <= 0
+                    else Decimal(put_volume) / Decimal(call_volume)
+                )
+                oi_score = self._clip_score(
+                    (oi_pcr - Decimal(1)) / Decimal("0.50")
+                )
+                volume_score = (
+                    Decimal(0)
+                    if volume_pcr is None
+                    else self._clip_score(
+                        (volume_pcr - Decimal(1)) / Decimal("0.50")
+                    )
+                )
+                score = self._clip_score(
+                    (oi_score + volume_score) / Decimal(2)
+                )
+                events.append(
+                    FeatureEvent(
+                        at=at,
+                        family="Options",
+                        score=score,
+                        label=(
+                            f"Option PCR OI={oi_pcr:.2f} "
+                            f"VOL={'N/A' if volume_pcr is None else f'{volume_pcr:.2f}'}"
+                        ),
+                    )
+                )
+                events.append(
+                    FeatureEvent(
+                        at=at,
+                        family="Options microstructure",
+                        score=score,
+                        label="Option-chain OI/volume confirmation",
+                    )
+                )
+
+            # Scheduled event context is a risk gate, not a fabricated
+            # directional prediction.
+            scheduled = store.load_scheduled_events(start=start, end=end)
+            impact_windows = {
+                "HIGH": (30, 15),
+                "MEDIUM": (15, 10),
+            }
+            for event in scheduled:
+                window = impact_windows.get(event.impact)
+                if window is None:
+                    continue
+                pre, post = window
+                risk_windows.append(
+                    RiskWindow(
+                        start=event.scheduled_at - timedelta(minutes=pre),
+                        end=event.scheduled_at + timedelta(minutes=post),
+                        label=f"{event.impact} event: {event.name}",
+                    )
+                )
+
+        timeline = HistoricalFeatureTimeline(events, risk_windows)
+        event_families = set(timeline.families)
+
         available = set()
         if counts["candles"] > 0:
             available.update(
@@ -408,40 +598,52 @@ class DesktopDataService:
             available.update(("Options", "Options microstructure"))
         if counts["breadth_snapshots"] > 0:
             available.add("Breadth / constituents")
-        if (
-            counts["index_snapshots"] > 0
-            or counts["news_items"] > 0
-            or counts["scheduled_events"] > 0
-        ):
+        if counts["index_snapshots"] > 0 or counts["scheduled_events"] > 0:
             available.add("Volatility / macro context")
         if counts["news_items"] > 0 or counts["scheduled_events"] > 0:
             available.add("News / regime / time")
 
-        # The current frozen strategy engine is candle-derived. Extra stored
-        # families are audited here but are not allowed to masquerade as inputs
-        # until a causal adapter is explicitly wired into engine decisions.
-        decision_used = tuple(
+        decision_used = {
             family
-            for family in ("NIFTY price / structure", "Momentum / volatility")
+            for family in (
+                "NIFTY price / structure",
+                "Momentum / volatility",
+            )
             if family in mode.families and family in available
-        )
-        feature_sizes = {
-            family: len(features)
-            for family, features in FEATURE_FAMILIES
         }
-        used_touchpoints = sum(feature_sizes[family] for family in decision_used)
+        decision_used.update(
+            family
+            for family in event_families
+            if family in mode.families
+        )
+        if risk_windows:
+            for family in (
+                "Volatility / macro context",
+                "News / regime / time",
+            ):
+                if family in mode.families:
+                    decision_used.add(family)
+
         available_requested = tuple(
             family for family in mode.families if family in available
+        )
+        decision_used_ordered = tuple(
+            family for family in mode.families if family in decision_used
         )
         missing = tuple(
             family for family in mode.families if family not in available
         )
-        return FeatureCoverageAudit(
+        return timeline, FeatureCoverageAudit(
             requested_touchpoints=mode.feature_count,
-            decision_used_touchpoints=used_touchpoints,
+            available_touchpoints=sum(
+                feature_sizes[family] for family in available_requested
+            ),
+            decision_used_touchpoints=sum(
+                feature_sizes[family] for family in decision_used_ordered
+            ),
             requested_families=mode.families,
             available_families=available_requested,
-            decision_used_families=decision_used,
+            decision_used_families=decision_used_ordered,
             missing_families=missing,
             stored_rows=tuple(sorted(counts.items())),
         )
@@ -453,7 +655,7 @@ class DesktopDataService:
         """Run frozen-engine Shadow Arena and return selected candles for playback."""
 
         config = validate_replay_config(config)
-        sessions = config.total_sessions
+        sessions = config.required_sessions
         candles = self.load_shadow_replay_candles(sessions)
         selected_dates = sorted({
             candle.at.astimezone(INDIA_TIME).date()
@@ -468,15 +670,17 @@ class DesktopDataService:
         if not selected:
             raise ValueError("Shadow Trader historical candles unavailable")
 
-        coverage = self._shadow_feature_coverage(
+        timeline, coverage = self._build_shadow_feature_timeline(
             selected[0].at,
             selected[-1].at,
+            selected,
             config.mode_key,
         )
         report = run_shadow_arena(
             selected,
             config,
             feature_coverage=coverage,
+            timeline=timeline,
         )
 
         with SQLiteStore(self.database_path) as store:

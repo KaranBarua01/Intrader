@@ -300,6 +300,13 @@ def validate_replay_config(config: ShadowReplayConfig) -> ShadowReplayConfig:
         raise ValueError("walk-forward step sessions must be between 1 and 500")
     if not 1 <= int(config.walk_windows) <= 20:
         raise ValueError("walk-forward windows must be between 1 and 20")
+    walk_required = (
+        int(config.walk_train_sessions)
+        + int(config.walk_test_sessions)
+        + int(config.walk_step_sessions) * (int(config.walk_windows) - 1)
+    )
+    if walk_required > 1000:
+        raise ValueError("walk-forward configuration requires more than 1000 sessions")
     if config.starting_capital <= 0:
         raise ValueError("starting capital must be positive")
     if not Decimal("1") <= config.allocation_pct <= Decimal("100"):

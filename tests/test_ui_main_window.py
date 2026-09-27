@@ -102,6 +102,12 @@ def test_shadow_trader_replay_controls_are_present(monkeypatch) -> None:
     assert [page.replay_mode.itemData(i) for i in range(page.replay_mode.count())] == [
         "LOW", "MEDIUM", "HIGH"
     ]
+    assert [page.validation_mode.itemData(i) for i in range(page.validation_mode.count())] == [
+        "STANDARD", "WALK_FORWARD"
+    ]
+    assert [page.execution_mode.itemData(i) for i in range(page.execution_mode.count())] == [
+        "PROXY", "OPTION_PREMIUM"
+    ]
     assert page.selected_replay_sessions() == 90
     assert page.selected_replay_mode() == "MEDIUM"
     assert tuple(
@@ -111,12 +117,13 @@ def test_shadow_trader_replay_controls_are_present(monkeypatch) -> None:
     assert page.replay_start_button.text().startswith("▶")
 
 
-def _arena_report():
+def _arena_report(*, development_sessions: int = 20):
     config = SimpleNamespace(
-        development_sessions=20,
+        development_sessions=development_sessions,
         blind_sessions=10,
         total_sessions=30,
         mode_key="MEDIUM",
+        validation_mode="STANDARD",
         starting_capital=Decimal("50000"),
     )
     metrics = SimpleNamespace(
@@ -137,31 +144,52 @@ def _arena_report():
     trade = SimpleNamespace(
         timeframe_minutes=1,
         trader_label="1M SCALPER",
+        engine_id="engine1234567890",
         strategy_name="Synthetic Strategy",
         phase="BLIND",
-        at="2026-08-01T09:15:00+05:30",
+        opened_at="2026-08-01T09:15:00+05:30",
+        closed_at="2026-08-01T09:25:00+05:30",
+        hold_minutes=10,
         direction="CALL / LONG",
         entry_underlying=Decimal("24001"),
-        approx_exit_underlying_30m=Decimal("24031"),
-        gross_return_30m_pct=Decimal("0.125"),
-        net_return_30m_pct=Decimal("0.100"),
+        exit_underlying=Decimal("24031"),
+        gross_return_pct=Decimal("0.125"),
+        net_return_pct=Decimal("0.100"),
         paper_pnl=Decimal("12.50"),
         paper_balance_after=Decimal("50012.50"),
+        mfe_pct=Decimal("0.15"),
+        mae_pct=Decimal("-0.02"),
+        regime="TRENDING_UP",
+        time_bucket="09:15–10:00",
+        feature_scores=(("NIFTY price / structure", Decimal("0.4")),),
+        exit_reason="TIME_EXIT",
         result="WIN",
-        regime=None,
+    )
+    slice_stat = SimpleNamespace(
+        key="TRENDING_UP",
+        trades=1,
+        wins=1,
+        losses=0,
+        average_return_pct=Decimal("0.10"),
+        net_pnl=Decimal("12.50"),
+        profit_factor=None,
     )
     trader = SimpleNamespace(
         timeframe_minutes=1,
         trader_label="1M SCALPER",
         engine_id="engine1234567890",
+        hold_minutes=10,
         selected_strategy_name="Synthetic Strategy",
         blind_metrics=metrics,
         blind_paper=paper,
         trades=(trade,),
         rejected_signals=(),
+        regime_stats=(slice_stat,),
+        time_stats=(),
     )
     coverage = SimpleNamespace(
         requested_touchpoints=30,
+        available_touchpoints=15,
         decision_used_touchpoints=10,
         requested_families=(
             "NIFTY price / structure",
@@ -171,11 +199,22 @@ def _arena_report():
         available_families=(
             "NIFTY price / structure",
             "Momentum / volatility",
+            "Futures",
         ),
         decision_used_families=(
             "NIFTY price / structure",
             "Momentum / volatility",
         ),
+    )
+    ablation = SimpleNamespace(
+        trader_label="1M SCALPER",
+        label="BASE_STRATEGY",
+        families=(),
+        trades=1,
+        net_pnl=Decimal("12.50"),
+        return_pct=Decimal("0.025"),
+        profit_factor=None,
+        max_drawdown_pct=Decimal("0"),
     )
     return SimpleNamespace(
         config=config,
@@ -188,10 +227,12 @@ def _arena_report():
         blind_previously_reviewed=False,
         feature_coverage=coverage,
         trader_reports=(trader,),
+        ablation_results=(ablation,),
+        walk_forward_results=(),
     )
 
 
-def test_shadow_trader_results_tab_populates_and_opens(monkeypatch) -> None:
+def test_shadow_trader_results_tab_populates_05_research_outputs(monkeypatch) -> None:
     app, window = _window(monkeypatch)
     page = window.shadow_page
     report = _arena_report()
@@ -205,9 +246,12 @@ def test_shadow_trader_results_tab_populates_and_opens(monkeypatch) -> None:
     assert page.results_tournament.rowCount() == 1
     assert page.results_trades.rowCount() == 1
     assert page.results_rejected.rowCount() == 0
+    assert page.results_ablation.rowCount() == 1
+    assert page.results_slices.rowCount() == 1
+    assert page.results_touchpoints_metric.value.text() == "10 / 30"
 
 
-def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
+def test_shadow_arena_hides_pnl_until_causal_exit(monkeypatch) -> None:
     app, window = _window(monkeypatch)
     page = window.shadow_page
     start = datetime(2026, 8, 1, 9, 15, tzinfo=INDIA_TIME)
@@ -220,10 +264,9 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
             close=Decimal("24001") + Decimal(index),
             volume=1000 + index,
         )
-        for index in range(31)
+        for index in range(11)
     )
-    report = _arena_report()
-    report.config.development_sessions = 0
+    report = _arena_report(development_sessions=0)
 
     page.begin_visual_playback(candles, report)
     page._playback_timer.stop()
@@ -232,7 +275,6 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
     page._playback_tick()
     app.processEvents()
 
-    assert page.tabs.tabText(page.live_tab_index) == "Shadow Arena"
     open_rows = [
         row for row in range(page.live_tape.rowCount())
         if page.live_tape.item(row, 3).text() == "OPEN"
@@ -242,14 +284,13 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
     assert page.live_tape.item(row, 7).text() == "hidden"
     assert page.live_tape.item(row, 8).text() == "ACTIVE"
 
-    for _ in range(30):
+    for _ in range(10):
         page._playback_tick()
     app.processEvents()
 
-    assert page.live_tape.rowCount() >= 2
     close_rows = [
         row for row in range(page.live_tape.rowCount())
-        if page.live_tape.item(row, 3).text() == "CLOSE +30m"
+        if page.live_tape.item(row, 3).text() == "CLOSE 10m"
     ]
     assert close_rows
     row = close_rows[-1]
@@ -257,7 +298,7 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
     assert page.live_tape.item(row, 8).text() == "WIN"
 
 
-def test_shadow_arena_has_speed_skip_and_on_demand_chart(monkeypatch) -> None:
+def test_shadow_arena_has_day_pacing_skip_and_on_demand_chart(monkeypatch) -> None:
     app, window = _window(monkeypatch)
     page = window.shadow_page
     app.processEvents()

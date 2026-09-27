@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import csv
 import json
 
+from intrader.records_manager_pipeline import build_records_manager
+from intrader.shadow_lab import development_blind_split, replay_mode
 from intrader.storage import SQLiteStore
 
 
@@ -67,6 +69,67 @@ def export_shadow_results(store: SQLiteStore, target: Path) -> Path:
                 "mae_amount": outcome.mae_amount,
                 "directional_spot_change": outcome.directional_spot_change,
             })
+    return target
+
+
+def export_shadow_review_bundle(
+    store: SQLiteStore,
+    target: Path,
+    *,
+    sessions: int,
+    mode_key: str,
+) -> Path:
+    """Export one self-contained Shadow Trader review bundle for diagnosis."""
+
+    mode = replay_mode(mode_key)
+    development, blind = development_blind_split(sessions)
+    decisions = store.load_decision_records()
+    bundles = store.load_completed_shadow_bundles()
+    audits = store.load_reason_audits()
+    try:
+        performance = build_records_manager(store)
+        performance_payload = asdict(performance)
+    except Exception:
+        performance_payload = None
+
+    payload = {
+        "schema": "intrader-shadow-review-v1",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "replay_configuration": {
+            "requested_sessions": sessions,
+            "development_sessions": development,
+            "blind_sessions": blind,
+            "mode": mode.key,
+            "mode_label": mode.label,
+            "requested_touchpoints": mode.feature_count,
+            "feature_families": mode.families,
+            "description": mode.description,
+            "causality_rule": (
+                "decision engine may only read observations with timestamp <= simulated clock"
+            ),
+        },
+        "performance": performance_payload,
+        "decision_records": [asdict(decision) for decision in decisions],
+        "completed_shadow_trades": [
+            {
+                "decision": asdict(decision),
+                "trade": asdict(trade),
+                "outcome": asdict(outcome),
+            }
+            for decision, trade, outcome in bundles
+        ],
+        "reason_audits": [asdict(audit) for audit in audits],
+        "review_notes": [
+            "Missing historical families must remain missing; never infer expired option data.",
+            "Compare development and blind results separately before changing rules.",
+            "Upload this JSON back into ChatGPT for feature, regime, drawdown and expectancy review.",
+        ],
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(payload, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
     return target
 
 

@@ -242,6 +242,7 @@ class MainWindow(QMainWindow):
         self.calibration_page.refresh_requested.connect(self.refresh_calibration)
         self.shadow_page.replay_requested.connect(self.run_shadow_replay)
         self.shadow_page.replay_export_requested.connect(self.export_shadow_review)
+        self.shadow_page.playback_finished.connect(self.finish_shadow_replay_playback)
         self.export_page.shadow_export_requested.connect(self.export_shadow)
         self.export_page.reasoning_export_requested.connect(self.export_reasoning_log)
         self.export_page.audit_export_requested.connect(self.export_audits)
@@ -705,47 +706,25 @@ class MainWindow(QMainWindow):
         self._run_task(self.updater.apply, done, failed)
 
     def run_shadow_replay(self, sessions: int, mode_key: str) -> None:
-        """Run the current timestamp-causal historical Shadow Trader replay."""
+        """Run the causal replay, then animate a display-only historical playback."""
 
         self.shadow_page.set_replay_progress(
             0,
             sessions,
-            "RUNNING — downloading/caching historical NIFTY candles, then replaying chronologically…",
+            "RUNNING — downloading/caching historical NIFTY candles and calculating the replay…",
         )
 
         def task():
-            return self.service.run_shadow_replay(sessions, mode_key)
+            return self.service.run_shadow_replay_with_visuals(sessions, mode_key)
 
-        def done(report) -> None:
+        def done(payload) -> None:
+            report, candles = payload
             self._latest_shadow_replay_report = report
-            self.shadow_page.set_replay_report(report)
-            blind = report.blind
-            win_rate = (
-                "N/A"
-                if blind.win_rate_pct is None
-                else f"{blind.win_rate_pct:.2f}%"
-            )
-            expectancy = (
-                "N/A"
-                if blind.average_return_30m_pct is None
-                else f"{blind.average_return_30m_pct:.4f}%"
-            )
-            strategy = report.selected_strategy_name or "No qualifying strategy"
-            self.shadow_page.set_replay_progress(
-                report.actual_sessions,
-                report.requested_sessions,
-                (
-                    f"COMPLETE — candle-proxy replay finished. Frozen strategy: {strategy}. "
-                    f"Blind signals: {blind.evaluable_signals} • win rate: {win_rate} • "
-                    f"avg signed 30m return: {expectancy}. "
-                    "This is not exact option P&L until expired-option history is connected."
-                ),
-            )
-            self.shadow_page.set_replay_finished(
-                (
-                    f"COMPLETE — {report.actual_sessions} sessions processed in {report.mode} mode. "
-                    "Use Export Results and upload the JSON here for review."
-                )
+            self.shadow_page.set_replay_report(report, open_results=False)
+            self.shadow_page.begin_visual_playback(candles, report)
+            self.statusBar().showMessage(
+                "Replay calculation complete. Simulated Live Replay is now visualizing the historical run.",
+                6000,
             )
 
         def failed(message: str) -> None:
@@ -753,6 +732,39 @@ class MainWindow(QMainWindow):
             self._show_error(message)
 
         self._run_task(task, done, failed)
+
+    def finish_shadow_replay_playback(self) -> None:
+        report = self._latest_shadow_replay_report
+        if report is None:
+            return
+        blind = report.blind
+        win_rate = (
+            "N/A"
+            if blind.win_rate_pct is None
+            else f"{blind.win_rate_pct:.2f}%"
+        )
+        expectancy = (
+            "N/A"
+            if blind.average_return_30m_pct is None
+            else f"{blind.average_return_30m_pct:.4f}%"
+        )
+        strategy = report.selected_strategy_name or "No qualifying strategy"
+        self.shadow_page.set_replay_progress(
+            report.actual_sessions,
+            report.requested_sessions,
+            (
+                f"COMPLETE — frozen strategy: {strategy} • blind signals: "
+                f"{blind.evaluable_signals} • win rate: {win_rate} • "
+                f"avg signed 30m return: {expectancy}."
+            ),
+        )
+        self.shadow_page.set_replay_finished(
+            (
+                f"COMPLETE — {report.actual_sessions} sessions processed in {report.mode} mode. "
+                "Results are ready for review/export."
+            )
+        )
+        self.shadow_page.show_replay_results()
 
     def export_shadow_review(self, sessions: int, mode_key: str) -> None:
         path, _ = QFileDialog.getSaveFileName(

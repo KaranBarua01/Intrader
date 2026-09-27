@@ -248,7 +248,7 @@ def test_shadow_trader_results_tab_populates_05_research_outputs(monkeypatch) ->
     assert page.results_rejected.rowCount() == 0
     assert page.results_ablation.rowCount() == 1
     assert page.results_slices.rowCount() == 1
-    assert page.results_touchpoints_metric.value.text() == "10 / 30"
+    assert page.results_touchpoints_metric.value_label.text() == "10 / 30"
 
 
 def test_shadow_arena_hides_pnl_until_causal_exit(monkeypatch) -> None:

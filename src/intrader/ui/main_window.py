@@ -411,7 +411,7 @@ class MainWindow(QMainWindow):
 
         def done(payload) -> None:
             self.time_page.range_load_button.setEnabled(True)
-            self.time_page.range_load_button.setText("Analyze Period")
+            self.time_page.range_load_button.setText("▶  Analyze Period")
             analysis, opening, candles, _news, _events = payload
             self.time_page.set_range_analysis(analysis, opening, candles)
             self.statusBar().showMessage(
@@ -420,7 +420,7 @@ class MainWindow(QMainWindow):
 
         def failed(message: str) -> None:
             self.time_page.range_load_button.setEnabled(True)
-            self.time_page.range_load_button.setText("Analyze Period")
+            self.time_page.range_load_button.setText("▶  Analyze Period")
             self._show_error(message)
 
         self._run_task(task, done, failed)
@@ -520,7 +520,7 @@ class MainWindow(QMainWindow):
 
         def done(snapshot) -> None:
             self.strategy_page.analyze_button.setEnabled(True)
-            self.strategy_page.analyze_button.setText("Analyze Strategies")
+            self.strategy_page.analyze_button.setText("▶  Analyze Strategies")
             self.strategy_page.set_snapshot(snapshot)
             self.statusBar().showMessage(
                 "Strategy Lab analysis complete. No Intrader rules were changed.",
@@ -529,7 +529,7 @@ class MainWindow(QMainWindow):
 
         def failed(message: str) -> None:
             self.strategy_page.analyze_button.setEnabled(True)
-            self.strategy_page.analyze_button.setText("Analyze Strategies")
+            self.strategy_page.analyze_button.setText("▶  Analyze Strategies")
             self._show_error(message)
 
         self._run_task(task, done, failed)
@@ -592,7 +592,7 @@ class MainWindow(QMainWindow):
         self.update_button.setText("Checking…")
         def done(status: UpdateStatus) -> None:
             self.update_button.setEnabled(True)
-            self.update_button.setText("Update")
+            self.update_button.setText("↓  Update")
             if not status.available:
                 QMessageBox.information(self, "Intrader Update", status.summary)
                 return
@@ -609,7 +609,7 @@ class MainWindow(QMainWindow):
                 self._apply_update()
         def failed(message: str) -> None:
             self.update_button.setEnabled(True)
-            self.update_button.setText("Update")
+            self.update_button.setText("↓  Update")
             self._show_error(message)
         self._run_task(self.updater.check, done, failed)
 
@@ -618,7 +618,7 @@ class MainWindow(QMainWindow):
         self.update_button.setText("Updating…")
         def done(result: UpdateApplyResult) -> None:
             self.update_button.setEnabled(True)
-            self.update_button.setText("Update")
+            self.update_button.setText("↓  Update")
             if result.exit_to_install:
                 QMessageBox.information(self, "Intrader Update", result.message)
                 app = QApplication.instance()
@@ -632,7 +632,7 @@ class MainWindow(QMainWindow):
             )
         def failed(message: str) -> None:
             self.update_button.setEnabled(True)
-            self.update_button.setText("Update")
+            self.update_button.setText("↓  Update")
             self._show_error(message)
         self._run_task(self.updater.apply, done, failed)
 

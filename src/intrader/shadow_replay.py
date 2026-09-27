@@ -81,6 +81,7 @@ class FrozenStrategySelection:
     training_end: str | None
     development: ReplayMetrics
     candidates: tuple[ReplayCandidate, ...]
+    occurrences: tuple[StrategyOccurrence, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +423,7 @@ def train_frozen_strategy(
             for item in snapshot.strategies
             if item.definition.direction_scope != "PROCESS"
         ),
+        occurrences=() if selected is None else selected.occurrences,
     )
 
 

@@ -11,6 +11,8 @@ This document is the visual acceptance contract for the approved Intrader deskto
 - One fixed visual identity. There are no themes.
 - Only the accent color is user-customizable.
 - Accent options are matte/pastel presets.
+- The Intrader logo is fixed-color and never follows the accent.
+- Logo red: #FF1018. Logo grey: #666666.
 - Bullish green and bearish red are semantic and never follow the accent.
 - Background: warm off-white.
 - Cards: near-white, soft border, 14px radius, restrained shadow.
@@ -74,4 +76,4 @@ Supported accent presets:
 - Matte Orange #D9874E
 - Pastel Pink #E3B5C4
 
-The accent may affect the logo bar, tab underline, sliders, halftone decoration and editorial highlights. It must never redefine bullish/bearish meaning.
+The accent may affect tab underlines, sliders, halftone decoration and editorial highlights. It must never recolor the Intrader logo or redefine bullish/bearish meaning.

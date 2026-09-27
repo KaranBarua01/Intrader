@@ -41,7 +41,7 @@ def test_candle_proxy_replay_uses_development_then_blind() -> None:
         mode_key="LOW",
     )
 
-    assert report.schema == "intrader-shadow-replay-v1-candle-proxy"
+    assert report.schema == "intrader-shadow-replay-v2-results"
     assert report.requested_sessions == 30
     assert report.actual_sessions == 30
     assert report.development_sessions == 20
@@ -70,3 +70,22 @@ def test_replay_never_needs_future_session_to_form_report() -> None:
     assert report_30.last_session != report_with_future_present.last_session
     assert report_30.requested_touchpoints == 30
     assert report_with_future_present.requested_touchpoints == 30
+
+
+def test_replay_report_contains_trade_rows_and_risk_metrics() -> None:
+    report = run_candle_proxy_replay(
+        _synthetic_sessions(30),
+        sessions=30,
+        mode_key="HIGH",
+    )
+
+    assert report.trades
+    assert {trade.phase for trade in report.trades} <= {"DEVELOPMENT", "BLIND"}
+    assert any(trade.phase == "BLIND" for trade in report.trades)
+    assert report.blind.max_drawdown_pct_points >= Decimal("0")
+    assert report.blind.max_losing_streak >= 0
+    assert report.blind.max_winning_streak >= 0
+    assert all(
+        trade.result in {"WIN", "LOSS", "FLAT", "UNEVALUATED"}
+        for trade in report.trades
+    )

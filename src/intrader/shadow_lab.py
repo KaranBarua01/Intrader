@@ -177,6 +177,7 @@ DATA_COVERAGE: tuple[tuple[str, str, str, str], ...] = (
 
 
 REPLAY_SESSION_OPTIONS: tuple[int, ...] = (30, 60, 90)
+MAX_REPLAY_PHASE_SESSIONS = 5000
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,11 +272,36 @@ def replay_mode(key: str) -> ReplayModeSpec:
     raise ValueError(f"unknown Shadow Trader replay mode: {key}")
 
 
+def validate_replay_split(
+    development_sessions: int,
+    blind_sessions: int,
+) -> tuple[int, int]:
+    development = int(development_sessions)
+    blind = int(blind_sessions)
+    if development < 1:
+        raise ValueError("development phase must be at least 1 trading session")
+    if blind < 1:
+        raise ValueError("blind phase must be at least 1 trading session")
+    if development > MAX_REPLAY_PHASE_SESSIONS:
+        raise ValueError(
+            f"development phase exceeds the UI safety limit of {MAX_REPLAY_PHASE_SESSIONS} sessions"
+        )
+    if blind > MAX_REPLAY_PHASE_SESSIONS:
+        raise ValueError(
+            f"blind phase exceeds the UI safety limit of {MAX_REPLAY_PHASE_SESSIONS} sessions"
+        )
+    return development, blind
+
+
 def development_blind_split(sessions: int) -> tuple[int, int]:
-    if sessions not in REPLAY_SESSION_OPTIONS:
-        raise ValueError(f"unsupported Shadow Trader replay range: {sessions}")
-    blind = sessions // 3
-    return sessions - blind, blind
+    """Legacy 2/3 + 1/3 helper used by quick presets and old callers."""
+
+    total = int(sessions)
+    if total < 2:
+        raise ValueError("Shadow Trader replay needs at least 2 trading sessions")
+    blind = max(1, total // 3)
+    development = total - blind
+    return validate_replay_split(development, blind)
 
 
 if len(flattened_features()) != DEFAULT_SHADOW_LAB_PLAN.feature_count:

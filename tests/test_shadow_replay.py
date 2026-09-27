@@ -16,7 +16,7 @@ def _synthetic_sessions(count: int) -> tuple[Candle, ...]:
         if day.weekday() < 5:
             start = datetime.combine(day, time(9, 15), INDIA_TIME)
             session_base = base + Decimal(built * 20)
-            for minute in range(40):
+            for minute in range(80):
                 open_ = session_base + Decimal(minute)
                 close = open_ + Decimal("0.8")
                 candles.append(
@@ -41,7 +41,7 @@ def test_candle_proxy_replay_uses_development_then_blind() -> None:
         mode_key="LOW",
     )
 
-    assert report.schema == "intrader-shadow-replay-v1-candle-proxy"
+    assert report.schema == "intrader-shadow-replay-v2-results"
     assert report.requested_sessions == 30
     assert report.actual_sessions == 30
     assert report.development_sessions == 20
@@ -54,7 +54,7 @@ def test_candle_proxy_replay_uses_development_then_blind() -> None:
 def test_replay_never_needs_future_session_to_form_report() -> None:
     candles = _synthetic_sessions(31)
     report_30 = run_candle_proxy_replay(
-        candles[:-40],
+        candles[:-80],
         sessions=30,
         mode_key="MEDIUM",
     )
@@ -70,3 +70,22 @@ def test_replay_never_needs_future_session_to_form_report() -> None:
     assert report_30.last_session != report_with_future_present.last_session
     assert report_30.requested_touchpoints == 30
     assert report_with_future_present.requested_touchpoints == 30
+
+
+def test_replay_report_contains_trade_rows_and_risk_metrics() -> None:
+    report = run_candle_proxy_replay(
+        _synthetic_sessions(30),
+        sessions=30,
+        mode_key="HIGH",
+    )
+
+    assert report.trades
+    assert {trade.phase for trade in report.trades} <= {"DEVELOPMENT", "BLIND"}
+    assert any(trade.phase == "BLIND" for trade in report.trades)
+    assert report.blind.max_drawdown_pct_points >= Decimal("0")
+    assert report.blind.max_losing_streak >= 0
+    assert report.blind.max_winning_streak >= 0
+    assert all(
+        trade.result in {"WIN", "LOSS", "FLAT", "UNEVALUATED"}
+        for trade in report.trades
+    )

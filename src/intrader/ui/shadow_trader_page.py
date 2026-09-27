@@ -7,7 +7,8 @@ or the existing Market Brain.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QPointF, Signal
+from PySide6.QtGui import QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -30,6 +31,68 @@ from intrader.shadow_lab import (
     replay_mode,
 )
 from intrader.ui.components import Card, DataTable, MetricCard, ResponsiveMetricGrid
+
+
+class ReplayEquityCurve(QWidget):
+    """Small dependency-free cumulative-return chart for replay results."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._values: list[float] = [0.0]
+        self.setMinimumHeight(180)
+
+    def set_returns(self, returns) -> None:
+        cumulative = 0.0
+        values = [0.0]
+        for value in returns:
+            if value is None:
+                continue
+            cumulative += float(value)
+            values.append(cumulative)
+        self._values = values
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(12, 12, -12, -18)
+        if rect.width() <= 2 or rect.height() <= 2:
+            return
+
+        values = self._values or [0.0]
+        low = min(values)
+        high = max(values)
+        if high == low:
+            high += 1.0
+            low -= 1.0
+
+        def point(index: int, value: float) -> QPointF:
+            x = rect.left() if len(values) == 1 else (
+                rect.left() + rect.width() * index / (len(values) - 1)
+            )
+            y = rect.bottom() - rect.height() * ((value - low) / (high - low))
+            return QPointF(float(x), float(y))
+
+        axis_pen = QPen(self.palette().mid().color())
+        axis_pen.setWidth(1)
+        painter.setPen(axis_pen)
+        zero_y = point(0, 0.0).y()
+        painter.drawLine(
+            QPointF(float(rect.left()), zero_y),
+            QPointF(float(rect.right()), zero_y),
+        )
+
+        path = QPainterPath()
+        first = point(0, values[0])
+        path.moveTo(first)
+        for index, value in enumerate(values[1:], start=1):
+            path.lineTo(point(index, value))
+
+        curve_pen = QPen(self.palette().highlight().color())
+        curve_pen.setWidth(2)
+        painter.setPen(curve_pen)
+        painter.drawPath(path)
 
 
 class ShadowTraderPage(QWidget):
@@ -71,6 +134,8 @@ class ShadowTraderPage(QWidget):
 
         self.tabs.addTab(self._build_overview(), "Overview")
         self.tabs.addTab(self._build_historical(), "Replay")
+        self.results_page = self._build_results()
+        self.results_tab_index = self.tabs.addTab(self.results_page, "Results")
         self.tabs.addTab(self._build_forward(), "60-Day Forward")
         self.tabs.addTab(self._build_features(), "50 Features")
         self.tabs.addTab(self._build_data(), "Data Coverage")
@@ -240,6 +305,141 @@ class ShadowTraderPage(QWidget):
         self._sync_replay_controls()
         return page
 
+    def _build_results(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.setContentsMargins(4, 8, 4, 4)
+        root.setSpacing(8)
+
+        summary = Card("LATEST REPLAY RESULTS")
+        top = QHBoxLayout()
+        self.results_summary = QLabel(
+            "No historical replay has completed in this app session yet."
+        )
+        self.results_summary.setWordWrap(True)
+        top.addWidget(self.results_summary, 1)
+        self.results_export_button = QPushButton("↓  Export Full Review")
+        self.results_export_button.setObjectName("SecondaryButton")
+        self.results_export_button.setEnabled(False)
+        self.results_export_button.clicked.connect(self._request_export)
+        top.addWidget(self.results_export_button)
+        summary.layout_box.addLayout(top)
+        root.addWidget(summary)
+
+        self.results_strategy_metric = MetricCard("FROZEN STRATEGY")
+        self.results_range_metric = MetricCard("RANGE")
+        self.results_mode_metric = MetricCard("MODE")
+        self.results_period_metric = MetricCard("TEST PERIOD")
+        for metric in (
+            self.results_strategy_metric,
+            self.results_range_metric,
+            self.results_mode_metric,
+            self.results_period_metric,
+        ):
+            metric.set_value("—")
+        root.addWidget(
+            ResponsiveMetricGrid(
+                [
+                    self.results_strategy_metric,
+                    self.results_range_metric,
+                    self.results_mode_metric,
+                    self.results_period_metric,
+                ],
+                compact_height=78,
+            )
+        )
+
+        self.results_win_metric = MetricCard("BLIND WIN RATE")
+        self.results_return_metric = MetricCard("BLIND AVG 30M RETURN")
+        self.results_pf_metric = MetricCard("BLIND PROFIT FACTOR")
+        self.results_dd_metric = MetricCard("BLIND MAX DRAWDOWN")
+        self.results_winner_metric = MetricCard("AVG WINNER")
+        self.results_loser_metric = MetricCard("AVG LOSER")
+        self.results_streak_metric = MetricCard("MAX LOSING STREAK")
+        self.results_signals_metric = MetricCard("BLIND SIGNALS")
+        for metric in (
+            self.results_win_metric,
+            self.results_return_metric,
+            self.results_pf_metric,
+            self.results_dd_metric,
+            self.results_winner_metric,
+            self.results_loser_metric,
+            self.results_streak_metric,
+            self.results_signals_metric,
+        ):
+            metric.set_value("—")
+        root.addWidget(
+            ResponsiveMetricGrid(
+                [
+                    self.results_win_metric,
+                    self.results_return_metric,
+                    self.results_pf_metric,
+                    self.results_dd_metric,
+                    self.results_winner_metric,
+                    self.results_loser_metric,
+                    self.results_streak_metric,
+                    self.results_signals_metric,
+                ],
+                compact_height=78,
+            )
+        )
+
+        curve = Card("BLIND CUMULATIVE SIGNED RETURN — PROXY")
+        self.results_curve = ReplayEquityCurve()
+        self.results_curve.setToolTip(
+            "Cumulative 30-minute signed NIFTY return for the frozen strategy in the blind period."
+        )
+        curve.add_widget(self.results_curve)
+        root.addWidget(curve)
+
+        comparison = Card("DEVELOPMENT VS BLIND")
+        self.results_comparison = DataTable(
+            [
+                "Phase", "Sessions", "Signals", "Wins", "Losses", "Win Rate",
+                "Avg 30m", "Profit Factor", "Max DD", "Max Loss Streak",
+            ]
+        )
+        comparison.add_widget(self.results_comparison)
+        root.addWidget(comparison)
+
+        candidates = Card("DEVELOPMENT STRATEGY CANDIDATES")
+        self.results_candidates = DataTable(
+            ["Strategy", "Signals", "30m Hit Rate", "Avg 30m Return", "Sample"]
+        )
+        candidates.add_widget(self.results_candidates)
+        root.addWidget(candidates)
+
+        trades = Card("TRADE-BY-TRADE REPLAY")
+        self.results_trades = DataTable(
+            [
+                "Phase", "Time", "Direction", "Entry NIFTY", "Approx Exit 30m",
+                "+5m", "+15m", "+30m", "MFE", "MAE", "Result",
+            ]
+        )
+        trades.add_widget(self.results_trades)
+        root.addWidget(trades)
+
+        rejected = Card("REJECTED SIGNALS")
+        self.results_rejected = QLabel(
+            "The current candle-proxy replay does not yet generate a separate rejected-signal "
+            "stream. This section will populate when the full decision/filter engine is wired "
+            "into historical replay."
+        )
+        self.results_rejected.setWordWrap(True)
+        rejected.add_widget(self.results_rejected)
+        root.addWidget(rejected)
+
+        limitation = Card("MONEY RESULT STATUS")
+        self.results_money_note = QLabel(
+            "Current results measure signed NIFTY movement. Exact option premium P&L, charges, "
+            "slippage and rupee drawdown stay unavailable until historical expired-option data "
+            "is connected. Intrader will not invent those numbers."
+        )
+        self.results_money_note.setWordWrap(True)
+        limitation.add_widget(self.results_money_note)
+        root.addWidget(limitation)
+        return page
+
     def _build_forward(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
@@ -405,20 +605,125 @@ class ShadowTraderPage(QWidget):
         self.historical_progress.setFormat("%v / %m trading sessions")
         self.replay_status.setText(status)
 
+    @staticmethod
+    def _fmt_pct(value, digits: int = 2) -> str:
+        return "N/A" if value is None else f"{value:.{digits}f}%"
+
+    @staticmethod
+    def _fmt_number(value, digits: int = 2) -> str:
+        return "N/A" if value is None else f"{value:.{digits}f}"
+
     def set_replay_report(self, report) -> None:
         strategy = report.selected_strategy_name or "None"
         self.replay_strategy_metric.set_value(strategy)
         self.replay_win_metric.set_value(
-            "N/A"
-            if report.blind.win_rate_pct is None
-            else f"{report.blind.win_rate_pct:.2f}%"
+            self._fmt_pct(report.blind.win_rate_pct, 2)
         )
         self.replay_expectancy_metric.set_value(
-            "N/A"
-            if report.blind.average_return_30m_pct is None
-            else f"{report.blind.average_return_30m_pct:.4f}%"
+            self._fmt_pct(report.blind.average_return_30m_pct, 4)
         )
         self.replay_signal_metric.set_value(str(report.blind.evaluable_signals))
+
+        self.results_summary.setText(
+            f"{report.actual_sessions} trading sessions completed in {report.mode} mode. "
+            f"The strategy was selected only from the first {report.development_sessions} "
+            f"development sessions and then frozen for {report.blind_sessions} blind sessions."
+        )
+        self.results_strategy_metric.set_value(strategy)
+        self.results_range_metric.set_value(f"{report.actual_sessions} sessions")
+        self.results_mode_metric.set_value(
+            f"{report.mode} • {report.requested_touchpoints} touchpoints"
+        )
+        self.results_period_metric.set_value(
+            f"{report.first_session or '—'} → {report.last_session or '—'}"
+        )
+
+        blind = report.blind
+        self.results_win_metric.set_value(self._fmt_pct(blind.win_rate_pct, 2))
+        self.results_return_metric.set_value(
+            self._fmt_pct(blind.average_return_30m_pct, 4)
+        )
+        self.results_pf_metric.set_value(
+            self._fmt_number(blind.profit_factor, 3)
+        )
+        self.results_dd_metric.set_value(
+            f"{blind.max_drawdown_pct_points:.4f} pp"
+        )
+        self.results_winner_metric.set_value(
+            self._fmt_pct(blind.average_winner_pct, 4)
+        )
+        self.results_loser_metric.set_value(
+            self._fmt_pct(blind.average_loser_pct, 4)
+        )
+        self.results_streak_metric.set_value(str(blind.max_losing_streak))
+        self.results_signals_metric.set_value(str(blind.evaluable_signals))
+
+        def metrics_row(label, metrics):
+            return [
+                label,
+                metrics.sessions,
+                metrics.evaluable_signals,
+                metrics.wins,
+                metrics.losses,
+                self._fmt_pct(metrics.win_rate_pct, 2),
+                self._fmt_pct(metrics.average_return_30m_pct, 4),
+                self._fmt_number(metrics.profit_factor, 3),
+                f"{metrics.max_drawdown_pct_points:.4f} pp",
+                metrics.max_losing_streak,
+            ]
+
+        self.results_comparison.set_rows(
+            [
+                metrics_row("DEVELOPMENT", report.development),
+                metrics_row("BLIND", report.blind),
+            ]
+        )
+
+        self.results_candidates.set_rows(
+            [
+                [
+                    candidate.strategy_name,
+                    candidate.signals,
+                    self._fmt_pct(candidate.hit_rate_30m_pct, 2),
+                    self._fmt_pct(candidate.average_return_30m_pct, 4),
+                    candidate.sample_label,
+                ]
+                for candidate in report.candidates
+            ]
+        )
+
+        self.results_trades.set_rows(
+            [
+                [
+                    trade.phase,
+                    trade.at.replace("T", " ")[:16],
+                    trade.direction,
+                    f"{trade.entry_underlying:.2f}",
+                    (
+                        "N/A"
+                        if trade.approx_exit_underlying_30m is None
+                        else f"{trade.approx_exit_underlying_30m:.2f}"
+                    ),
+                    self._fmt_pct(trade.return_5m_pct, 4),
+                    self._fmt_pct(trade.return_15m_pct, 4),
+                    self._fmt_pct(trade.return_30m_pct, 4),
+                    self._fmt_pct(trade.mfe_30m_pct, 4),
+                    self._fmt_pct(trade.mae_30m_pct, 4),
+                    trade.result,
+                ]
+                for trade in report.trades
+            ]
+        )
+
+        self.results_curve.set_returns(
+            [
+                trade.return_30m_pct
+                for trade in report.trades
+                if trade.phase == "BLIND"
+            ]
+        )
+        self.results_export_button.setEnabled(True)
+        self.tabs.setCurrentIndex(self.results_tab_index)
 
     def set_replay_finished(self, status: str) -> None:
         self._replay_running = False

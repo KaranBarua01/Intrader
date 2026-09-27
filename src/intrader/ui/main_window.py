@@ -19,11 +19,12 @@ from intrader.ui.data_service import DesktopDataService
 from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.strategy_lab_page import StrategyLabPage
+from intrader.ui.shadow_trader_page import ShadowTraderPage
 from intrader.ui.theme import ACCENT_PRESETS, DEFAULT_ACCENT, build_stylesheet
 from intrader.ui.updater import UpdateApplyResult, UpdateError, UpdateService, UpdateStatus
 from intrader.ui.utility_pages import (
     CalibrationPage, DashboardPage, ExportPage, RecordsManagerPage,
-    ResearchBrowserPage, ShadowTraderPage, SystemHealthPage, ThesisPage,
+    ResearchBrowserPage, SystemHealthPage, ThesisPage,
     TradeHistoryPage,
 )
 from intrader import __version__
@@ -174,6 +175,7 @@ class MainWindow(QMainWindow):
             ("Time Travel", "Time Travel"),
             ("Analysis", "Analysis Mode"),
             ("Strategy Lab", "Strategy Lab"),
+            ("Shadow Trader", "Shadow Trader"),
         ]
         for label, page_name in primary:
             button = QPushButton(label)
@@ -191,7 +193,6 @@ class MainWindow(QMainWindow):
         for label, page_name in (
             ("Dashboard", "Dashboard"),
             ("Thesis", "Thesis"),
-            ("Shadow Trader", "Shadow Trader"),
             ("Records Manager", "Records Manager"),
             ("Trade History", "Trade History"),
             ("Research Browser", "Research Browser"),

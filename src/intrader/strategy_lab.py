@@ -512,8 +512,8 @@ def analyze_strategies(
 
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("strategy analysis range invalid")
-    if end - start > timedelta(days=30, minutes=1):
-        raise ValueError("Strategy Lab is limited to 30 days")
+    if end - start > timedelta(days=220, minutes=1):
+        raise ValueError("strategy analysis range exceeds research limit")
 
     ordered = tuple(sorted(
         (

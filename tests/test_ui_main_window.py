@@ -52,15 +52,15 @@ def test_windowed_mode_uses_scrollable_responsive_page_wrappers(monkeypatch) -> 
     assert wrapper.widgetResizable() is True
 
 
-def test_theme_and_layout_preset_are_runtime_switchable(monkeypatch) -> None:
+def test_accent_is_runtime_switchable_without_theme_modes(monkeypatch) -> None:
     app, window = _window(monkeypatch)
 
-    window.apply_theme("Frost")
+    window.apply_accent("#5E7FAE")
     window.show_page("Time Travel")
-    window.apply_layout_preset("Analysis")
+    window.apply_layout_preset("Compact")
     app.processEvents()
 
-    assert window.current_theme == "Frost"
-    assert window.layout_combo.currentText() in {
-        "Balanced", "Compact", "Analysis", "Monitoring"
-    }
+    assert window.current_accent == "#5E7FAE"
+    assert window.accent_selector.accent() == "#5E7FAE"
+    assert not hasattr(window, "theme_combo")
+    assert not hasattr(window, "layout_combo")

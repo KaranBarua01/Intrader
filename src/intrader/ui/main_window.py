@@ -159,13 +159,20 @@ class MainWindow(QMainWindow):
         dock_layout.setContentsMargins(10, 8, 10, 8)
         dock_layout.setSpacing(4)
 
+        brand = QLabel("INTRADER")
+        brand.setStyleSheet(
+            "color:white;font-weight:750;letter-spacing:2px;padding:0 8px;"
+        )
+        dock_layout.addWidget(brand)
+        divider = QLabel("│")
+        divider.setStyleSheet("color:#565656;")
+        dock_layout.addWidget(divider)
+
         primary = [
-            ("Dashboard", "Dashboard"),
             ("Intrader", "Intrader Mode"),
             ("Time Travel", "Time Travel"),
             ("Analysis", "Analysis Mode"),
             ("Strategy Lab", "Strategy Lab"),
-            ("System Health", "System Health"),
         ]
         for label, page_name in primary:
             button = QPushButton(label)
@@ -181,12 +188,14 @@ class MainWindow(QMainWindow):
         self.more_button.setObjectName("DockNavButton")
         self.more_menu = QMenu(self.more_button)
         for label, page_name in (
+            ("Dashboard", "Dashboard"),
             ("Thesis", "Thesis"),
             ("Shadow Trader", "Shadow Trader"),
             ("Records Manager", "Records Manager"),
             ("Trade History", "Trade History"),
             ("Research Browser", "Research Browser"),
             ("Calibration", "Calibration"),
+            ("System Health", "System Health"),
             ("Export", "Export"),
         ):
             action = self.more_menu.addAction(label)
@@ -197,8 +206,9 @@ class MainWindow(QMainWindow):
         dock_layout.addWidget(self.more_button)
         dock_layout.addSpacing(8)
 
-        version = QLabel(f"Intrader v{__version__} • Phase 4 Desktop")
-        version.setObjectName("Muted")
+        dock_layout.addStretch(1)
+        version = QLabel(f"Intrader {__version__}")
+        version.setStyleSheet("color:#A9A9A9;padding:0 8px;")
         dock_layout.addWidget(version)
         self.bottom_dock.hide()
 

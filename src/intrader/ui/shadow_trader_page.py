@@ -155,7 +155,7 @@ class ShadowTraderPage(QWidget):
         self.replay_mode.setCurrentIndex(self.replay_mode.findData("MEDIUM"))
         selectors.addWidget(self.replay_mode)
         selectors.addStretch(1)
-        controls.add_layout(selectors)
+        controls.layout_box.addLayout(selectors)
 
         self.mode_description = QLabel()
         self.mode_description.setWordWrap(True)
@@ -169,7 +169,7 @@ class ShadowTraderPage(QWidget):
         buttons.addWidget(self.replay_start_button)
         buttons.addStretch(1)
         buttons.addWidget(self.replay_export_button)
-        controls.add_layout(buttons)
+        controls.layout_box.addLayout(buttons)
 
         self.replay_status = QLabel(
             "READY — choose a range and depth, then start the historical shadow replay."

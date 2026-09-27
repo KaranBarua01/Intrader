@@ -16,7 +16,12 @@ from PySide6.QtWidgets import (
 
 from intrader.ui.components import AccentSelector, BrandLockup, DotMatrix, TriangleDockButton
 from intrader.ui.data_service import DesktopDataService
-from intrader.ui.exporter import export_reason_audits, export_reasoning, export_shadow_results
+from intrader.ui.exporter import (
+    export_reason_audits,
+    export_reasoning,
+    export_shadow_results,
+    export_shadow_review_bundle,
+)
 from intrader.ui.mode_pages import AnalysisModePage, IntraderModePage, TimeTravelPage
 from intrader.ui.strategy_lab_page import StrategyLabPage
 from intrader.ui.shadow_trader_page import ShadowTraderPage
@@ -68,6 +73,7 @@ class MainWindow(QMainWindow):
         self._pages: dict[str, QWidget] = {}
         self._page_widgets: dict[str, QWidget] = {}
         self._dock_visible = False
+        self._latest_shadow_replay_report = None
         self._build_ui()
         self.apply_accent(self.current_accent)
         saved_geometry = self.settings.value("geometry")
@@ -234,6 +240,8 @@ class MainWindow(QMainWindow):
         if hasattr(self.strategy_page, "enrich_requested"):
             self.strategy_page.enrich_requested.connect(self.enrich_strategy_lab)
         self.calibration_page.refresh_requested.connect(self.refresh_calibration)
+        self.shadow_page.replay_requested.connect(self.run_shadow_replay)
+        self.shadow_page.replay_export_requested.connect(self.export_shadow_review)
         self.export_page.shadow_export_requested.connect(self.export_shadow)
         self.export_page.reasoning_export_requested.connect(self.export_reasoning_log)
         self.export_page.audit_export_requested.connect(self.export_audits)
@@ -695,6 +703,75 @@ class MainWindow(QMainWindow):
             self.update_button.setText("↓  Update")
             self._show_error(message)
         self._run_task(self.updater.apply, done, failed)
+
+    def run_shadow_replay(self, sessions: int, mode_key: str) -> None:
+        """Run the current timestamp-causal historical Shadow Trader replay."""
+
+        self.shadow_page.set_replay_progress(
+            0,
+            sessions,
+            "RUNNING — downloading/caching historical NIFTY candles, then replaying chronologically…",
+        )
+
+        def task():
+            return self.service.run_shadow_replay(sessions, mode_key)
+
+        def done(report) -> None:
+            self._latest_shadow_replay_report = report
+            blind = report.blind
+            win_rate = (
+                "N/A"
+                if blind.win_rate_pct is None
+                else f"{blind.win_rate_pct:.2f}%"
+            )
+            expectancy = (
+                "N/A"
+                if blind.average_return_30m_pct is None
+                else f"{blind.average_return_30m_pct:.4f}%"
+            )
+            strategy = report.selected_strategy_name or "No qualifying strategy"
+            self.shadow_page.set_replay_progress(
+                report.actual_sessions,
+                report.requested_sessions,
+                (
+                    f"COMPLETE — candle-proxy replay finished. Frozen strategy: {strategy}. "
+                    f"Blind signals: {blind.evaluable_signals} • win rate: {win_rate} • "
+                    f"avg signed 30m return: {expectancy}. "
+                    "This is not exact option P&L until expired-option history is connected."
+                ),
+            )
+            self.shadow_page.set_replay_finished(
+                (
+                    f"COMPLETE — {report.actual_sessions} sessions processed in {report.mode} mode. "
+                    "Use Export Results and upload the JSON here for review."
+                )
+            )
+
+        def failed(message: str) -> None:
+            self.shadow_page.set_replay_failed(message)
+            self._show_error(message)
+
+        self._run_task(task, done, failed)
+
+    def export_shadow_review(self, sessions: int, mode_key: str) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Shadow Trader Review",
+            f"intrader_shadow_review_{sessions}d_{mode_key.lower()}.json",
+            "JSON Files (*.json)",
+        )
+        if not path:
+            return
+        replay_report = self._latest_shadow_replay_report
+        self._export(
+            lambda store: export_shadow_review_bundle(
+                store,
+                Path(path),
+                sessions=sessions,
+                mode_key=mode_key,
+                replay_report=replay_report,
+            )
+        )
 
     def export_shadow(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export Shadow Results", "intrader_shadow_results.csv", "CSV Files (*.csv)")

@@ -11,6 +11,8 @@ from intrader.checkpoint2 import check_market_access
 from intrader.config import load_config
 from intrader.credentials import CredentialStore
 from intrader.global_news import fetch_global_market_news, market_relevance_score
+from intrader.context_pipeline import refresh_context
+from intrader.context_sources import RequestsContextTransport
 from intrader.historical_intelligence import analyze_historical_range, build_opening_possibilities
 from intrader.historical_reanalysis import reanalyze_stored_decision
 from intrader.historical import Candle, INDIA_TIME, fetch_candles
@@ -258,10 +260,61 @@ class DesktopDataService:
                 end=end,
             )
 
-    def analyze_time_range(self, start: datetime, end: datetime):
-        """Build read-only range intelligence from locally cached data."""
+    def analyze_time_range(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        enrich_missing: bool = False,
+    ):
+        """Build range intelligence from the full selected window.
 
-        candles = self.load_nifty_candle_range(start, end, backfill_missing=False)
+        When enrichment is enabled, candles, global news and authoritative
+        macro context are refreshed on a best-effort basis before analysis.
+        Unsupported historical families remain explicitly unavailable instead
+        of being fabricated.
+        """
+
+        if enrich_missing:
+            try:
+                candles = self.load_nifty_candle_range(
+                    start,
+                    end,
+                    backfill_missing=True,
+                )
+            except Exception:
+                candles = self.load_nifty_candle_range(
+                    start,
+                    end,
+                    backfill_missing=False,
+                )
+            try:
+                self.refresh_global_news_range(start, end)
+            except Exception:
+                pass
+            try:
+                with SQLiteStore(self.database_path) as store:
+                    refresh_context(
+                        store,
+                        RequestsContextTransport(),
+                        end,
+                        recent_hours=max(
+                            24,
+                            min(
+                                24 * 31,
+                                int((end - start).total_seconds() // 3600) + 24,
+                            ),
+                        ),
+                        lookahead_hours=24,
+                    )
+            except Exception:
+                pass
+        else:
+            candles = self.load_nifty_candle_range(
+                start,
+                end,
+                backfill_missing=False,
+            )
 
         with SQLiteStore(self.database_path, read_only=True) as store:
             decisions = tuple(
@@ -343,6 +396,67 @@ class DesktopDataService:
             as_of=opening_as_of,
         )
         return analysis, opening, candles, news, events
+
+    def analyze_session_to_now(
+        self,
+        at: datetime | None = None,
+    ):
+        """Analyze the complete current or most-recent session up to a timestamp.
+
+        The advisory action comes only from an immutable Market Brain decision
+        recorded inside that session. Candle-only evidence never fabricates a
+        CALL/PUT recommendation.
+        """
+
+        at = (at or datetime.now(INDIA_TIME)).astimezone(INDIA_TIME)
+        session_day = at.date()
+
+        if session_day.weekday() >= 5 or at.time() < time(9, 15):
+            session_day -= timedelta(days=1)
+            while session_day.weekday() >= 5:
+                session_day -= timedelta(days=1)
+            session_end = datetime.combine(
+                session_day,
+                time(15, 30),
+                INDIA_TIME,
+            )
+        else:
+            market_close = datetime.combine(
+                session_day,
+                time(15, 30),
+                INDIA_TIME,
+            )
+            session_end = min(at, market_close)
+
+        session_start = datetime.combine(
+            session_day,
+            time(9, 15),
+            INDIA_TIME,
+        )
+        analysis, opening, candles, news, events = self.analyze_time_range(
+            session_start,
+            session_end,
+            enrich_missing=True,
+        )
+        with SQLiteStore(self.database_path, read_only=True) as store:
+            decisions = tuple(
+                decision
+                for decision in store.load_decision_records()
+                if session_start
+                <= decision.decided_at.astimezone(INDIA_TIME)
+                <= session_end
+            )
+        latest = decisions[-1] if decisions else None
+        return (
+            analysis,
+            opening,
+            candles,
+            news,
+            events,
+            latest,
+            session_start,
+            session_end,
+        )
 
     def enrich_time_range(self, start: datetime, end: datetime) -> tuple[int, int]:
         """Explicitly fetch missing candles/news for a historical range."""

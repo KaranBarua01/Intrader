@@ -8,6 +8,7 @@ desktop Shadow Trader workspace.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 
 NEWS_RESOURCES: tuple[tuple[str, str], ...] = (
@@ -176,7 +177,9 @@ DATA_COVERAGE: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-REPLAY_SESSION_OPTIONS: tuple[int, ...] = (30, 60, 90)
+REPLAY_SESSION_OPTIONS: tuple[int, ...] = (30, 60, 90, 250)
+MAX_REPLAY_SESSION_INPUT = 500
+DEFAULT_TRADER_TIMEFRAMES: tuple[int, ...] = (1, 5, 10, 15)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +236,48 @@ REPLAY_MODES: tuple[ReplayModeSpec, ...] = (
 )
 
 
+
+@dataclass(frozen=True, slots=True)
+class ShadowReplayConfig:
+    development_sessions: int = 60
+    blind_sessions: int = 30
+    mode_key: str = "MEDIUM"
+    starting_capital: Decimal = Decimal("50000")
+    allocation_pct: Decimal = Decimal("25")
+    friction_bps: Decimal = Decimal("5")
+    trader_timeframes: tuple[int, ...] = DEFAULT_TRADER_TIMEFRAMES
+
+    @property
+    def total_sessions(self) -> int:
+        return self.development_sessions + self.blind_sessions
+
+
+def validate_replay_config(config: ShadowReplayConfig) -> ShadowReplayConfig:
+    if not 1 <= int(config.development_sessions) <= MAX_REPLAY_SESSION_INPUT:
+        raise ValueError("development sessions must be between 1 and 500")
+    if not 1 <= int(config.blind_sessions) <= MAX_REPLAY_SESSION_INPUT:
+        raise ValueError("blind sessions must be between 1 and 500")
+    replay_mode(config.mode_key)
+    if config.starting_capital <= 0:
+        raise ValueError("starting capital must be positive")
+    if not Decimal("1") <= config.allocation_pct <= Decimal("100"):
+        raise ValueError("allocation percent must be between 1 and 100")
+    if not Decimal("0") <= config.friction_bps <= Decimal("1000"):
+        raise ValueError("friction bps must be between 0 and 1000")
+    frames = tuple(sorted(set(int(value) for value in config.trader_timeframes)))
+    if not frames or any(value not in DEFAULT_TRADER_TIMEFRAMES for value in frames):
+        raise ValueError("trader timeframes must use 1, 5, 10 or 15 minutes")
+    return ShadowReplayConfig(
+        development_sessions=int(config.development_sessions),
+        blind_sessions=int(config.blind_sessions),
+        mode_key=str(config.mode_key).upper(),
+        starting_capital=Decimal(config.starting_capital),
+        allocation_pct=Decimal(config.allocation_pct),
+        friction_bps=Decimal(config.friction_bps),
+        trader_timeframes=frames,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ShadowLabPlan:
     historical_sessions: int = 90
@@ -272,9 +317,9 @@ def replay_mode(key: str) -> ReplayModeSpec:
 
 
 def development_blind_split(sessions: int) -> tuple[int, int]:
-    if sessions not in REPLAY_SESSION_OPTIONS:
-        raise ValueError(f"unsupported Shadow Trader replay range: {sessions}")
-    blind = sessions // 3
+    if sessions < 2:
+        raise ValueError("Shadow Trader replay needs at least 2 sessions")
+    blind = max(1, sessions // 3)
     return sessions - blind, blind
 
 

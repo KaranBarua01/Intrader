@@ -93,67 +93,86 @@ def test_shadow_trader_replay_controls_are_present(monkeypatch) -> None:
     page = window.shadow_page
     app.processEvents()
 
-    assert [page.replay_range.itemData(i) for i in range(page.replay_range.count())] == [30, 60, 90]
+    assert page.development_days.minimum() == 1
+    assert page.development_days.maximum() == 500
+    assert page.blind_days.minimum() == 1
+    assert page.blind_days.maximum() == 500
+    assert page.development_days.value() == 60
+    assert page.blind_days.value() == 30
     assert [page.replay_mode.itemData(i) for i in range(page.replay_mode.count())] == [
         "LOW", "MEDIUM", "HIGH"
     ]
     assert page.selected_replay_sessions() == 90
     assert page.selected_replay_mode() == "MEDIUM"
+    assert tuple(
+        timeframe for timeframe, check in page.trader_checks.items() if check.isChecked()
+    ) == (1, 5, 10, 15)
+    assert page.starting_capital.value() == 50000
     assert page.replay_start_button.text().startswith("▶")
-    assert "Export Results" in page.replay_export_button.text()
+
+
+def _arena_report():
+    config = SimpleNamespace(
+        development_sessions=20,
+        blind_sessions=10,
+        total_sessions=30,
+        mode_key="MEDIUM",
+        starting_capital=Decimal("50000"),
+    )
+    metrics = SimpleNamespace(
+        trades=1,
+        wins=1,
+        losses=0,
+        win_rate_pct=Decimal("100"),
+        average_return_pct=Decimal("0.10"),
+        profit_factor=None,
+    )
+    paper = SimpleNamespace(
+        starting_capital=Decimal("50000"),
+        ending_capital=Decimal("50012.50"),
+        net_pnl=Decimal("12.50"),
+        return_pct=Decimal("0.025"),
+        max_drawdown_pct=Decimal("0"),
+    )
+    trade = SimpleNamespace(
+        timeframe_minutes=1,
+        trader_label="1M SCALPER",
+        strategy_name="Synthetic Strategy",
+        phase="BLIND",
+        at="2026-08-01T09:15:00+05:30",
+        direction="CALL / LONG",
+        entry_underlying=Decimal("24001"),
+        approx_exit_underlying_30m=Decimal("24031"),
+        gross_return_30m_pct=Decimal("0.125"),
+        net_return_30m_pct=Decimal("0.100"),
+        paper_pnl=Decimal("12.50"),
+        paper_balance_after=Decimal("50012.50"),
+        result="WIN",
+        regime=None,
+    )
+    trader = SimpleNamespace(
+        timeframe_minutes=1,
+        trader_label="1M SCALPER",
+        selected_strategy_name="Synthetic Strategy",
+        blind_metrics=metrics,
+        blind_paper=paper,
+        trades=(trade,),
+        rejected_signals=(),
+    )
+    return SimpleNamespace(
+        config=config,
+        actual_sessions=30,
+        total_sessions=30,
+        first_session="2026-07-01",
+        last_session="2026-08-15",
+        trader_reports=(trader,),
+    )
 
 
 def test_shadow_trader_results_tab_populates_and_opens(monkeypatch) -> None:
     app, window = _window(monkeypatch)
     page = window.shadow_page
-
-    metrics = SimpleNamespace(
-        sessions=10,
-        evaluable_signals=3,
-        wins=2,
-        losses=1,
-        win_rate_pct=Decimal("66.6667"),
-        average_return_30m_pct=Decimal("0.12"),
-        average_winner_pct=Decimal("0.20"),
-        average_loser_pct=Decimal("-0.04"),
-        profit_factor=Decimal("2.5"),
-        max_drawdown_pct_points=Decimal("0.04"),
-        max_losing_streak=1,
-    )
-    candidate = SimpleNamespace(
-        strategy_name="Synthetic Strategy",
-        signals=8,
-        hit_rate_30m_pct=Decimal("62.5"),
-        average_return_30m_pct=Decimal("0.08"),
-        sample_label="EARLY",
-    )
-    trade = SimpleNamespace(
-        phase="BLIND",
-        at="2026-08-01T10:00:00+05:30",
-        direction="CALL / LONG",
-        entry_underlying=Decimal("24000"),
-        approx_exit_underlying_30m=Decimal("24024"),
-        return_5m_pct=Decimal("0.02"),
-        return_15m_pct=Decimal("0.06"),
-        return_30m_pct=Decimal("0.10"),
-        mfe_30m_pct=Decimal("0.14"),
-        mae_30m_pct=Decimal("-0.03"),
-        result="WIN",
-    )
-    report = SimpleNamespace(
-        selected_strategy_name="Synthetic Strategy",
-        development_sessions=20,
-        blind_sessions=10,
-        actual_sessions=30,
-        requested_touchpoints=30,
-        mode="MEDIUM",
-        first_session="2026-07-01",
-        last_session="2026-08-15",
-        development=metrics,
-        blind=metrics,
-        candidates=(candidate,),
-        trades=(trade,),
-    )
+    report = _arena_report()
 
     page.set_replay_report(report)
     app.processEvents()
@@ -161,15 +180,15 @@ def test_shadow_trader_results_tab_populates_and_opens(monkeypatch) -> None:
     assert page.tabs.tabText(page.results_tab_index) == "Results"
     assert page.tabs.currentIndex() == page.results_tab_index
     assert page.results_export_button.isEnabled()
+    assert page.results_tournament.rowCount() == 1
     assert page.results_trades.rowCount() == 1
-    assert page.results_comparison.rowCount() == 2
-    assert page.results_candidates.rowCount() == 1
+    assert page.results_rejected.rowCount() == 0
 
 
-def test_shadow_trader_live_replay_hides_outcome_until_plus_30_minutes(monkeypatch) -> None:
+def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
     app, window = _window(monkeypatch)
     page = window.shadow_page
-    start = datetime(2026, 8, 3, 9, 15, tzinfo=INDIA_TIME)
+    start = datetime(2026, 8, 1, 9, 15, tzinfo=INDIA_TIME)
     candles = tuple(
         Candle(
             at=start + timedelta(minutes=index),
@@ -181,24 +200,8 @@ def test_shadow_trader_live_replay_hides_outcome_until_plus_30_minutes(monkeypat
         )
         for index in range(31)
     )
-    trade = SimpleNamespace(
-        phase="BLIND",
-        at=start.isoformat(),
-        direction="CALL / LONG",
-        entry_underlying=Decimal("24001"),
-        approx_exit_underlying_30m=Decimal("24031"),
-        return_5m_pct=Decimal("0.02"),
-        return_15m_pct=Decimal("0.06"),
-        return_30m_pct=Decimal("0.125"),
-        mfe_30m_pct=Decimal("0.14"),
-        mae_30m_pct=Decimal("-0.03"),
-        result="WIN",
-    )
-    report = SimpleNamespace(
-        development_sessions=0,
-        requested_sessions=1,
-        trades=(trade,),
-    )
+    report = _arena_report()
+    report.config.development_sessions = 0
 
     page.begin_visual_playback(candles, report)
     page._playback_timer.stop()
@@ -207,21 +210,27 @@ def test_shadow_trader_live_replay_hides_outcome_until_plus_30_minutes(monkeypat
     page._playback_tick()
     app.processEvents()
 
-    assert page.tabs.tabText(page.live_tab_index) == "Live Replay"
+    assert page.tabs.tabText(page.live_tab_index) == "Shadow Arena"
     assert page.live_tape.rowCount() == 1
-    assert page.live_tape.item(0, 6).text() == "hidden"
-    assert page.live_tape.item(0, 7).text() == "ACTIVE"
+    assert page.live_tape.item(0, 3).text() == "OPEN"
+    assert page.live_tape.item(0, 7).text() == "hidden"
+    assert page.live_tape.item(0, 8).text() == "ACTIVE"
 
     page._playback_tick()
     app.processEvents()
 
-    assert page.live_tape.rowCount() == 2
-    assert page.live_tape.item(1, 2).text() == "CLOSE +30m"
-    assert page.live_tape.item(1, 6).text() == "0.1250%"
-    assert page.live_tape.item(1, 7).text() == "WIN"
+    assert page.live_tape.rowCount() >= 2
+    close_rows = [
+        row for row in range(page.live_tape.rowCount())
+        if page.live_tape.item(row, 3).text() == "CLOSE +30m"
+    ]
+    assert close_rows
+    row = close_rows[-1]
+    assert page.live_tape.item(row, 7).text() == "₹12.50"
+    assert page.live_tape.item(row, 8).text() == "WIN"
 
 
-def test_shadow_trader_live_replay_has_speed_and_skip_controls(monkeypatch) -> None:
+def test_shadow_arena_has_speed_skip_and_on_demand_chart(monkeypatch) -> None:
     app, window = _window(monkeypatch)
     page = window.shadow_page
     app.processEvents()
@@ -231,3 +240,5 @@ def test_shadow_trader_live_replay_has_speed_and_skip_controls(monkeypatch) -> N
     ]
     assert page.live_speed.currentData() == 500
     assert page.live_skip_button.text() == "Skip to Results"
+    assert page.live_chart_button.text() == "Open Chart"
+    assert page.live_chart.isHidden()

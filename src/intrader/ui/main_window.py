@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
         top_layout.setContentsMargins(16, 8, 16, 8)
         top_layout.setSpacing(10)
 
-        self.brand = BrandLockup(self.current_accent)
+        self.brand = BrandLockup()
         top_layout.addWidget(self.brand)
         top_layout.addStretch(1)
 
@@ -287,7 +287,6 @@ class MainWindow(QMainWindow):
         self.settings.setValue("accent", accent)
         for dots in self.findChildren(DotMatrix):
             dots.set_accent(accent)
-        self.brand.mark.set_accent(accent)
 
     def apply_layout_preset(self, preset: str = "Compact") -> None:
         current = self.stack.currentWidget()

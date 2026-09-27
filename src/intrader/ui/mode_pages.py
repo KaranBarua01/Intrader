@@ -30,88 +30,142 @@ def _text(value) -> str:
     return "N/A" if value is None else str(value)
 
 
-class OpeningScenarioPanel(Card):
-    """Dense next-session scenario summary for one-screen Time Travel."""
+class OpeningScenarioPanel(QWidget):
+    """Right-side Time Travel intelligence stack matching the approved mockup."""
 
     def __init__(self) -> None:
-        super().__init__("Opening possibilities")
-        self._bars: dict[str, QProgressBar] = {}
-        self._values: dict[str, QLabel] = {}
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(5)
+        super().__init__()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        context = Card()
+        context_head = QHBoxLayout()
+        title = QLabel("Analysis Context")
+        title.setObjectName("SectionTitle")
+        context_head.addWidget(title)
+        context_head.addStretch(1)
+        context_head.addWidget(DotMatrix(columns=4, rows=3))
+        context.layout_box.addLayout(context_head)
+        self.context_text = QLabel(
+            "Run Analyze Period to build evidence-based context for this range."
+        )
+        self.context_text.setWordWrap(True)
+        self.context_text.setObjectName("Muted")
+        context.layout_box.addWidget(self.context_text)
+        root.addWidget(context)
+
+        metric_row = QHBoxLayout()
+        metric_row.setSpacing(8)
+        self._metric_cards: dict[str, tuple[MetricCard, QProgressBar]] = {}
+        for key, label in (
+            ("bullish", "BULLISH OPEN WEIGHT"),
+            ("balanced", "BALANCED OPEN WEIGHT"),
+            ("bearish", "BEARISH OPEN WEIGHT"),
+            ("gap", "GAP RISK"),
+        ):
+            card = MetricCard(label, "N/A")
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setTextVisible(False)
+            card.layout_box.addWidget(bar)
+            metric_row.addWidget(card, 1)
+            self._metric_cards[key] = (card, bar)
+        root.addLayout(metric_row)
+
+        detail = Card()
+        detail_head = QHBoxLayout()
+        detail_title = QLabel("Next-Session Opening Possibilities")
+        detail_title.setObjectName("SectionTitle")
+        detail_head.addWidget(detail_title)
+        detail_head.addStretch(1)
+        evidence = QLabel("Evidence Based")
+        evidence.setObjectName("Muted")
+        detail_head.addWidget(evidence)
+        detail.layout_box.addLayout(detail_head)
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        left = QWidget()
+        left_layout = QGridLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setHorizontalSpacing(8)
+        left_layout.setVerticalSpacing(7)
+        self._detail_values: dict[str, QLabel] = {}
         for row, (key, label) in enumerate((
             ("bullish", "Bullish"),
             ("balanced", "Balanced"),
             ("bearish", "Bearish"),
-            ("gap", "Gap risk"),
+            ("gap", "Gap Risk"),
         )):
-            name = QLabel(label)
-            name.setObjectName("Muted")
+            value = QLabel("N/A")
+            value.setObjectName("MetricValue")
             bar = QProgressBar()
             bar.setRange(0, 1000)
             bar.setTextVisible(False)
-            value = QLabel("N/A")
-            value.setMinimumWidth(48)
-            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(name, row, 0)
-            grid.addWidget(bar, row, 1)
-            grid.addWidget(value, row, 2)
-            self._bars[key] = bar
-            self._values[key] = value
-        self.layout_box.addLayout(grid)
-
-        self.meta = QLabel("Scenario weights only — not calibrated probabilities.")
-        self.meta.setWordWrap(True)
-        self.meta.setObjectName("Muted")
-        self.layout_box.addWidget(self.meta)
+            left_layout.addWidget(value, row, 0)
+            left_layout.addWidget(QLabel(label), row, 1)
+            left_layout.addWidget(bar, row, 2)
+            self._detail_values[key] = value
+            self._metric_cards[key] = (self._metric_cards[key][0], bar)
+        body.addWidget(left, 1)
 
         self.drivers = QLabel("No opening evidence available for this selection.")
         self.drivers.setWordWrap(True)
         self.drivers.setObjectName("Muted")
-        self.layout_box.addWidget(self.drivers, 1)
+        body.addWidget(self.drivers, 1)
+        detail.layout_box.addLayout(body)
 
-    def _set_row(self, key: str, value, tone: str = "neutral") -> None:
+        self.meta = QLabel("Scenario weights only — not calibrated probabilities.")
+        self.meta.setWordWrap(True)
+        self.meta.setObjectName("Muted")
+        detail.layout_box.addWidget(self.meta)
+        root.addWidget(detail, 1)
+
+    def set_analysis_context(self, text: str) -> None:
+        self.context_text.setText(
+            text or "No period context is available for this range."
+        )
+
+    def _set_metric(self, key: str, value, tone: str = "neutral") -> None:
         numeric = max(0.0, min(100.0, float(value)))
-        bar = self._bars[key]
-        bar.setValue(round(numeric * 10))
-        bar_color = (
+        card, detail_bar = self._metric_cards[key]
+        card.set_value(
+            f"{numeric:.0f}%",
+            "positive" if tone == "positive" else "negative" if tone == "negative" else "neutral",
+        )
+        color = (
             BULLISH_COLOR
             if tone == "positive"
             else BEARISH_COLOR
             if tone == "negative"
-            else "#8daab4"
+            else "#6E7880"
         )
-        bar.setStyleSheet(
-            "QProgressBar{background:#edf0f1;border:none;border-radius:4px;"
-            "min-height:8px;max-height:8px;}"
-            f"QProgressBar::chunk{{background:{bar_color};border-radius:4px;}}"
-        )
-        label = self._values[key]
-        label.setText(f"{numeric:.1f}%")
-        label.setObjectName(
-            "Positive" if tone == "positive" else "Negative" if tone == "negative" else "MetricValue"
-        )
-        label.style().unpolish(label)
-        label.style().polish(label)
+        for bar in (detail_bar,):
+            bar.setValue(round(numeric * 10))
+            bar.setStyleSheet(
+                "QProgressBar{background:#ECE9E3;border:none;border-radius:4px;"
+                "min-height:8px;max-height:8px;}"
+                f"QProgressBar::chunk{{background:{color};border-radius:4px;}}"
+            )
+        self._detail_values[key].setText(f"{numeric:.0f}%")
 
     def set_snapshot(self, opening) -> None:
-        self._set_row("bullish", opening.bullish_weight, "positive")
-        self._set_row("balanced", opening.balanced_weight)
-        self._set_row("bearish", opening.bearish_weight, "negative")
-        self._set_row(
+        self._set_metric("bullish", opening.bullish_weight, "positive")
+        self._set_metric("balanced", opening.balanced_weight)
+        self._set_metric("bearish", opening.bearish_weight, "negative")
+        self._set_metric(
             "gap",
             opening.gap_risk,
             "negative" if opening.gap_risk >= 60 else "neutral",
         )
         self.meta.setText(
-            f"Next: {opening.next_session_candidate}  •  "
+            f"Next session: {opening.next_session_candidate}  •  "
             f"Bias {opening.bias_score:.1f}  •  "
-            f"Coverage {opening.evidence_coverage:.0f}%\n"
-            "Scenario weights only — not calibrated probabilities."
+            f"Evidence coverage {opening.evidence_coverage:.0f}%\n"
+            "Scenario weights are evidence weights, not calibrated probabilities."
         )
-        evidence = list(opening.drivers[:6])
+        evidence = list(opening.drivers[:5])
         if opening.limitations:
             evidence.append(f"Limit: {opening.limitations[0]}")
         self.drivers.setText(

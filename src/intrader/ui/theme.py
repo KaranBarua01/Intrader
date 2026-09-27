@@ -1,254 +1,279 @@
-"""Minimal workstation themes for the Intrader desktop application."""
+"""Intrader fixed light editorial workstation theme.
+
+The visual identity is intentionally fixed. Only the accent hue is user-selectable.
+Market semantics remain fixed: bullish green and bearish red never follow the accent.
+"""
 
 from __future__ import annotations
 
 
-THEMES = {
-    "Sand": {
-        "bg": "#f6f4ef",
-        "bg2": "#f1f5f6",
-        "panel": "#fffefa",
-        "panel2": "#fbfaf7",
-        "border": "#ece8e1",
-        "muted": "#78838a",
-        "text": "#243039",
-        "title": "#1f2a32",
-        "accent": "#edf4f6",
-        "accent_border": "#d6e3e7",
-        "accent_text": "#29444f",
-        "header": "#f4f3ef",
-    },
-    "Frost": {
-        "bg": "#f4f8fb",
-        "bg2": "#eef5f8",
-        "panel": "#fbfdff",
-        "panel2": "#f7fbfe",
-        "border": "#e3ebef",
-        "muted": "#71808b",
-        "text": "#24313a",
-        "title": "#1d2b35",
-        "accent": "#eaf4fb",
-        "accent_border": "#d0e2ed",
-        "accent_text": "#23495f",
-        "header": "#eff5f8",
-    },
-    "Paper": {
-        "bg": "#f8f7f4",
-        "bg2": "#f3f5f4",
-        "panel": "#ffffff",
-        "panel2": "#fcfbf8",
-        "border": "#eceae5",
-        "muted": "#797f84",
-        "text": "#2b3135",
-        "title": "#20262a",
-        "accent": "#f0f4f5",
-        "accent_border": "#dce5e7",
-        "accent_text": "#304149",
-        "header": "#f5f4f1",
-    },
-}
+DEFAULT_ACCENT = "#D85C5C"
+ACCENT_PRESETS = (
+    ("Matte Red", "#D85C5C"),
+    ("Pastel Peach", "#F2B894"),
+    ("Matte Green", "#5E9B72"),
+    ("Pastel Cyan", "#A6D7D8"),
+    ("Matte Blue", "#5E7FAE"),
+    ("Pastel Violet", "#C7B7DF"),
+    ("Matte Orange", "#D9874E"),
+    ("Pastel Pink", "#E3B5C4"),
+)
+
+BULLISH_COLOR = "#2D8A60"
+BEARISH_COLOR = "#C64B4B"
 
 
-def build_stylesheet(theme_name: str = "Sand") -> str:
-    p = THEMES.get(theme_name, THEMES["Sand"])
+def build_stylesheet(accent: str = DEFAULT_ACCENT) -> str:
     return f"""
 QWidget {{
     background: transparent;
-    color: {p["text"]};
+    color: #17191c;
     font-family: "Segoe UI";
     font-size: 12px;
 }}
 QMainWindow, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {{
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 {p["bg"]},
-        stop:0.58 {p["bg"]},
-        stop:1 {p["bg2"]}
-    );
+    background: #F5F4F1;
 }}
 QFrame#TopBar {{
-    background: rgba(255,255,255,0.78);
+    background: #FBFAF7;
     border: none;
-    border-bottom: 1px solid {p["border"]};
+    border-bottom: 1px solid #E5E2DB;
 }}
-QFrame#Card {{
-    background: {p["panel"]};
-    border: 1px solid {p["border"]};
+QFrame#Card,
+QFrame#MetricRibbon,
+QFrame#SoftPanel {{
+    background: rgba(255,255,255,0.94);
+    border: 1px solid #E8E5DE;
     border-radius: 14px;
 }}
-QFrame#MetricRibbon {{
-    background: {p["panel"]};
-    border: 1px solid {p["border"]};
-    border-radius: 13px;
+QFrame#BottomDock {{
+    background: #171717;
+    border: none;
+    border-radius: 14px;
 }}
 QFrame#RibbonDivider {{
-    background: {p["border"]};
+    background: #E7E4DD;
     border: none;
-}}
-QFrame#BottomDock {{
-    background: rgba(255,255,255,0.96);
-    border: 1px solid {p["border"]};
-    border-radius: 18px;
 }}
 QLabel#AppTitle {{
-    font-size: 19px;
-    font-weight: 750;
-    color: {p["title"]};
+    color: #111318;
+    font-size: 18px;
+    font-weight: 720;
+    letter-spacing: 4px;
+}}
+QLabel#BrandSubtitle {{
+    color: #92979C;
+    font-size: 9px;
+    letter-spacing: 3px;
 }}
 QLabel#PageTitle {{
-    font-size: 19px;
-    font-weight: 700;
-    color: {p["title"]};
+    color: #17191c;
+    font-size: 22px;
+    font-weight: 720;
+}}
+QLabel#SectionTitle {{
+    color: #17191c;
+    font-size: 15px;
+    font-weight: 680;
 }}
 QLabel#CardTitle {{
-    font-size: 11px;
-    font-weight: 650;
-    color: #66727b;
+    color: #58616A;
+    font-size: 10px;
+    font-weight: 680;
+    letter-spacing: 1px;
 }}
 QLabel#HeroValue {{
-    font-size: 27px;
-    font-weight: 740;
-    color: {p["title"]};
+    color: #17191c;
+    font-size: 28px;
+    font-weight: 760;
 }}
 QLabel#MetricValue {{
+    color: #17191c;
     font-size: 18px;
-    font-weight: 700;
-    color: {p["title"]};
+    font-weight: 720;
 }}
 QLabel#RibbonLabel {{
-    font-size: 10px;
-    font-weight: 650;
-    color: {p["muted"]};
+    color: #757D84;
+    font-size: 9px;
+    font-weight: 680;
+    letter-spacing: 1px;
 }}
 QLabel#RibbonValue {{
-    font-size: 17px;
-    font-weight: 700;
-    color: {p["title"]};
+    color: #17191c;
+    font-size: 18px;
+    font-weight: 720;
 }}
-QLabel#Muted {{ color: {p["muted"]}; }}
-QLabel#Positive {{ color: #2d8a60; font-weight: 700; }}
-QLabel#Negative {{ color: #c64b4b; font-weight: 700; }}
-QLabel#Warning {{ color: #a36d16; font-weight: 700; }}
+QLabel#Muted {{ color: #7C848A; }}
+QLabel#Positive {{ color: #2D8A60; font-weight: 700; }}
+QLabel#Negative {{ color: #C64B4B; font-weight: 700; }}
+QLabel#Accent {{ color: {accent}; font-weight: 700; }}
+QLabel#Warning {{ color: #A36D16; font-weight: 700; }}
+
 QPushButton, QToolButton {{
-    background: rgba(255,255,255,0.80);
-    border: 1px solid {p["border"]};
-    border-radius: 8px;
-    padding: 6px 10px;
-    color: #2f3941;
+    background: #FBFAF7;
+    border: 1px solid #DFDCD5;
+    border-radius: 9px;
+    padding: 7px 11px;
+    color: #25292D;
 }}
 QPushButton:hover, QToolButton:hover {{
-    background: {p["accent"]};
-    border-color: {p["accent_border"]};
+    background: #F1F0EC;
+    border-color: #D4D0C8;
 }}
-QPushButton:pressed, QToolButton:pressed {{ background: {p["header"]}; }}
+QPushButton:pressed, QToolButton:pressed {{
+    background: #EDEBE6;
+}}
 QPushButton#PrimaryButton {{
-    background: {p["accent"]};
-    border: 1px solid {p["accent_border"]};
-    color: {p["accent_text"]};
-    font-weight: 650;
+    background: #171717;
+    border: 1px solid #171717;
+    color: white;
+    font-weight: 680;
+}}
+QPushButton#SecondaryButton {{
+    background: #FBFAF7;
+    border: 1px solid #DFDCD5;
+    color: #25292D;
 }}
 QPushButton#DockNavButton {{
-    border: none;
-    padding: 8px 12px;
+    color: #BABEC2;
     background: transparent;
-    border-radius: 10px;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
 }}
-QPushButton#DockNavButton:hover {{ background: {p["header"]}; }}
+QPushButton#DockNavButton:hover {{
+    background: #262626;
+    color: white;
+}}
 QPushButton#DockNavButton[active="true"] {{
-    background: {p["accent"]};
-    color: {p["accent_text"]};
+    background: #262626;
+    color: white;
     font-weight: 700;
 }}
 QPushButton#TimeframeButton {{
     min-width: 30px;
-    max-width: 42px;
+    max-width: 44px;
     min-height: 24px;
     max-height: 24px;
-    padding: 0 5px;
+    padding: 0 6px;
     border-radius: 7px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: {p["muted"]};
+    background: #FAF9F6;
+    border: 1px solid #E5E2DB;
+    color: #70777D;
     font-size: 10px;
     font-weight: 650;
 }}
 QPushButton#TimeframeButton:hover {{
-    background: {p["header"]};
+    color: #17191c;
+    background: #F0EFEB;
 }}
 QPushButton#TimeframeButton[timeframeActive="true"] {{
-    background: {p["accent"]};
-    border: 1px solid {p["accent_border"]};
-    color: {p["accent_text"]};
+    color: white;
+    background: #171717;
+    border-color: #171717;
 }}
-QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QDoubleSpinBox {{
-    background: rgba(255,255,255,0.86);
-    border: 1px solid {p["border"]};
+QPushButton#AccentDot {{
+    border: none;
     border-radius: 8px;
-    padding: 6px 8px;
+    min-width: 16px;
+    max-width: 16px;
+    min-height: 16px;
+    max-height: 16px;
+    padding: 0;
+}}
+QPushButton#AccentDot[selected="true"] {{
+    border: 2px solid #171717;
+}}
+
+QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QDoubleSpinBox {{
+    background: #FBFAF7;
+    border: 1px solid #DFDCD5;
+    border-radius: 8px;
+    padding: 7px 9px;
+    color: #272A2E;
 }}
 QComboBox::drop-down, QDateEdit::drop-down {{
     border: none;
     width: 18px;
 }}
+
 QTableWidget, QTextBrowser {{
-    background: rgba(255,255,255,0.82);
-    alternate-background-color: {p["panel2"]};
-    border: 1px solid {p["border"]};
+    background: #FEFDFB;
+    alternate-background-color: #FAF9F6;
+    border: 1px solid #E7E4DD;
     border-radius: 9px;
-    gridline-color: #f0ede8;
-    selection-background-color: {p["accent"]};
-    selection-color: {p["title"]};
+    gridline-color: #ECE9E3;
+    selection-background-color: #EEF6F2;
+    selection-color: #17191c;
 }}
 QHeaderView::section {{
-    background: {p["header"]};
-    color: #5f6970;
+    background: #F6F4F0;
+    color: #5F676E;
     border: none;
-    border-bottom: 1px solid {p["border"]};
-    padding: 6px;
-    font-weight: 620;
+    border-bottom: 1px solid #E5E2DB;
+    padding: 7px;
+    font-weight: 650;
 }}
+
 QTabWidget::pane {{
-    border: 1px solid {p["border"]};
-    background: rgba(255,255,255,0.66);
+    border: 1px solid #E7E4DD;
+    background: #FEFDFB;
     border-radius: 9px;
 }}
 QTabBar::tab {{
-    background: {p["header"]};
+    background: transparent;
     border: none;
-    padding: 7px 11px;
-    color: {p["muted"]};
+    color: #6C7379;
+    padding: 8px 15px;
 }}
 QTabBar::tab:selected {{
-    background: {p["panel"]};
-    color: {p["accent_text"]};
+    color: #17191c;
     font-weight: 700;
+    border-bottom: 2px solid {accent};
 }}
+
 QSlider::groove:horizontal {{
     height: 4px;
-    background: #dfddd7;
+    background: #E1DED8;
     border-radius: 2px;
 }}
 QSlider::handle:horizontal {{
-    width: 13px;
-    margin: -5px 0;
-    border-radius: 7px;
-    background: #91afba;
+    width: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+    background: {accent};
 }}
 QProgressBar {{
-    background: #eceff0;
+    background: #ECE9E3;
     border: none;
     border-radius: 4px;
     min-height: 8px;
     max-height: 8px;
     text-align: center;
 }}
-QProgressBar::chunk {{ background: #a7c2ca; border-radius: 4px; }}
+QProgressBar::chunk {{
+    background: {accent};
+    border-radius: 4px;
+}}
 QSplitter::handle {{
     background: transparent;
     width: 5px;
     height: 5px;
 }}
+QScrollBar:vertical {{
+    width: 8px;
+    background: transparent;
+}}
+QScrollBar::handle:vertical {{
+    background: #D4D0C8;
+    min-height: 28px;
+    border-radius: 4px;
+}}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
 """
 
 
-APP_STYLESHEET = build_stylesheet("Sand")
+APP_STYLESHEET = build_stylesheet(DEFAULT_ACCENT)

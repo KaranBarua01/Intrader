@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Iterable, Mapping, Sequence
 
 from intrader.historical import Candle, INDIA_TIME
+from intrader.shadow_execution import execution_adapter
 from intrader.shadow_lab import ShadowReplayConfig, TRADER_HOLD_MINUTES
 from intrader.strategy_lab import detect_strategy_signal
 
@@ -374,6 +375,7 @@ class CausalFrozenEngine:
         self.spec = spec
         self.config = config
         self.timeline = timeline or HistoricalFeatureTimeline()
+        self.execution = execution_adapter(config.execution_mode)
         self.aggregator = CausalBarAggregator(spec.timeframe_minutes)
         self.history: list[Candle] = []
         self.position: _OpenPosition | None = None
@@ -453,6 +455,27 @@ class CausalFrozenEngine:
             self._settle_rejected(last_candle)
             if self.position is not None:
                 self._close_position(last_candle, "SESSION_END")
+            # Rejected signals whose evaluation horizon extends beyond market
+            # close remain explicitly unevaluated; they are never rolled into
+            # the next trading day.
+            for pending in self.pending_rejected:
+                self.rejected.append(
+                    StreamRejectedSignal(
+                        timeframe_minutes=self.spec.timeframe_minutes,
+                        engine_id=self.spec.engine_id,
+                        at=pending.at.isoformat(),
+                        direction=(
+                            "CALL / LONG"
+                            if pending.direction > 0
+                            else "PUT / SHORT"
+                        ),
+                        reason=pending.reason,
+                        hypothetical_return_pct=None,
+                        hypothetical_pnl=None,
+                        classification="UNEVALUATED_SESSION_END",
+                    )
+                )
+            self.pending_rejected = []
 
     def report(self) -> StreamEngineReport:
         returns = [item.net_return_pct for item in self.trades]
@@ -556,10 +579,16 @@ class CausalFrozenEngine:
         position = self.position
         if position is None:
             return
-        gross = _pct(candle.close - position.entry_price, position.entry_price) * D(position.direction)
-        friction_pct = self.config.friction_bps / D(100)
-        net = gross - friction_pct
-        pnl = position.allocated_capital * net / D(100)
+        execution = self.execution.evaluate(
+            entry_price=position.entry_price,
+            exit_price=candle.close,
+            direction=position.direction,
+            allocated_capital=position.allocated_capital,
+            friction_bps=self.config.friction_bps,
+        )
+        gross = execution.gross_return_pct
+        net = execution.net_return_pct
+        pnl = execution.paper_pnl
         self.balance += pnl
         self.peak = max(self.peak, self.balance)
         drawdown = self.peak - self.balance
@@ -603,10 +632,15 @@ class CausalFrozenEngine:
             if candle.at < due:
                 remaining.append(pending)
                 continue
-            gross = _pct(candle.close - pending.entry_price, pending.entry_price) * D(pending.direction)
-            friction_pct = self.config.friction_bps / D(100)
-            net = gross - friction_pct
-            pnl = pending.allocated_capital * net / D(100)
+            execution = self.execution.evaluate(
+                entry_price=pending.entry_price,
+                exit_price=candle.close,
+                direction=pending.direction,
+                allocated_capital=pending.allocated_capital,
+                friction_bps=self.config.friction_bps,
+            )
+            net = execution.net_return_pct
+            pnl = execution.paper_pnl
             classification = (
                 "MISSED_WINNER" if net > 0
                 else "GOOD_REJECTION" if net < 0

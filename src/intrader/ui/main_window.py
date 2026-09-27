@@ -218,6 +218,7 @@ class MainWindow(QMainWindow):
 
         self.time_page.load_button.clicked.connect(self.load_time_travel)
         self.time_page.range_load_button.clicked.connect(self.load_time_range)
+        self.time_page.session_requested.connect(self.load_session_to_now)
         self.time_page.reanalyze_button.clicked.connect(self.reanalyze_time_travel)
         if hasattr(self.time_page, "replay_enrich_button"):
             self.time_page.replay_enrich_button.clicked.connect(
@@ -409,20 +410,76 @@ class MainWindow(QMainWindow):
         self.time_page.range_load_button.setText("Analyzing…")
 
         def task():
-            return self.service.analyze_time_range(start, end)
+            return self.service.analyze_time_range(
+                start,
+                end,
+                enrich_missing=True,
+            )
 
         def done(payload) -> None:
             self.time_page.range_load_button.setEnabled(True)
             self.time_page.range_load_button.setText("▶  Analyze Period")
-            analysis, opening, candles, _news, _events = payload
-            self.time_page.set_range_analysis(analysis, opening, candles)
+            analysis, opening, candles, news, events = payload
+            self.time_page.set_range_analysis(
+                analysis,
+                opening,
+                candles,
+                news,
+                events,
+            )
             self.statusBar().showMessage(
-                "Historical range analysis complete.", 5000
+                "Historical range analysis complete across candles, cached market context, "
+                "recorded decisions and every available stored data family.",
+                6500,
             )
 
         def failed(message: str) -> None:
             self.time_page.range_load_button.setEnabled(True)
             self.time_page.range_load_button.setText("▶  Analyze Period")
+            self._show_error(message)
+
+        self._run_task(task, done, failed)
+
+    def load_session_to_now(self) -> None:
+        self.time_page.session_view_button.setEnabled(False)
+        self.time_page.session_view_button.setText("Analyzing Session…")
+
+        def task():
+            return self.service.analyze_session_to_now()
+
+        def done(payload) -> None:
+            (
+                analysis,
+                opening,
+                candles,
+                news,
+                events,
+                latest_decision,
+                session_start,
+                session_end,
+            ) = payload
+            self.time_page.session_view_button.setEnabled(True)
+            self.time_page.session_view_button.setText("Session to Now")
+            self.time_page.tabs.setCurrentIndex(1)
+            self.time_page.set_range_inputs(session_start, session_end)
+            self.time_page.set_range_analysis(
+                analysis,
+                opening,
+                candles,
+                news,
+                events,
+                session_decision=latest_decision,
+                session_mode=True,
+            )
+            self.statusBar().showMessage(
+                "Session-to-Now analysis complete. Guidance uses the latest verified "
+                "Market Brain decision; missing families are never guessed.",
+                6500,
+            )
+
+        def failed(message: str) -> None:
+            self.time_page.session_view_button.setEnabled(True)
+            self.time_page.session_view_button.setText("Session to Now")
             self._show_error(message)
 
         self._run_task(task, done, failed)

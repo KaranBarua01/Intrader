@@ -505,7 +505,7 @@ class ShadowTraderPage(QWidget):
         self.results_capital_metric = MetricCard("STARTING CAPITAL / TRADER")
         self.results_blind_status_metric = MetricCard("BLIND STATUS")
         self.results_touchpoints_metric = MetricCard("TOUCHPOINTS USED")
-        self.results_available_metric = MetricCard("AVAILABLE FAMILIES")
+        self.results_available_metric = MetricCard("TOUCHPOINTS AVAILABLE")
         self.results_engines_metric = MetricCard("FROZEN ENGINES")
         root.addWidget(
             ResponsiveMetricGrid(
@@ -1067,7 +1067,7 @@ class ShadowTraderPage(QWidget):
                         "—",
                         "—",
                         "—",
-                        "POSITION BUSY",
+                        payload.reason,
                     ]
                 )
                 continue

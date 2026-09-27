@@ -664,7 +664,8 @@ class TimeTravelPage(QWidget):
         self.range_enrich_button = QPushButton("Fetch Missing")
         self.range_enrich_button.setObjectName("SecondaryButton")
         self.range_enrich_button.setToolTip(
-            "Opt-in network enrichment; analysis itself stays local/read-only."
+            "Manual retry for candles/news/context. Analyze Period already refreshes "
+            "the selected range on a best-effort basis."
         )
         controls.addWidget(self.range_enrich_button)
         controls.addStretch(1)

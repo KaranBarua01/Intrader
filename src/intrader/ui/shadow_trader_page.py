@@ -813,7 +813,7 @@ class ShadowTraderPage(QWidget):
         if state is not None:
             controls["state"].setText(state)
         pnl = balance - self._latest_config.starting_capital
-        drawdown = D(0) if peak == 0 else (peak - balance) / peak * D(100)
+        drawdown = Decimal(0) if peak == 0 else (peak - balance) / peak * Decimal(100)
         controls["balance"].setText(f"Balance  ₹{balance:,.2f}")
         controls["pnl"].setText(f"P&L  {pnl:+,.2f}")
         controls["wl"].setText(f"W {wins} / L {losses}")

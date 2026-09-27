@@ -708,7 +708,7 @@ class MainWindow(QMainWindow):
     def run_shadow_replay(self, config) -> None:
         """Run the configurable parallel Shadow Arena, then animate it."""
 
-        total = config.total_sessions
+        total = config.required_sessions
         self.shadow_page.set_replay_progress(
             0,
             total,
@@ -754,8 +754,9 @@ class MainWindow(QMainWindow):
         )
         self.shadow_page.set_replay_finished(
             (
-                f"COMPLETE — Shadow Arena processed {report.actual_sessions} sessions "
-                f"in {report.config.mode_key} mode. Results are ready for review/export."
+                f"COMPLETE — Intrader 0.5 research engine processed {report.actual_sessions} "
+                f"standard sessions in {report.config.mode_key} mode "
+                f"({report.config.validation_mode}). Results are ready for review/export."
             )
         )
         self.shadow_page.show_replay_results()

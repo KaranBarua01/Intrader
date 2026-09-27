@@ -73,6 +73,18 @@ class ReplayTradeResult:
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenStrategySelection:
+    strategy_id: str | None
+    strategy_name: str | None
+    development_sessions: int
+    training_start: str | None
+    training_end: str | None
+    development: ReplayMetrics
+    candidates: tuple[ReplayCandidate, ...]
+    occurrences: tuple[StrategyOccurrence, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ShadowReplayReport:
     schema: str
     mode: str
@@ -364,6 +376,54 @@ def _trade(phase: str, occurrence: StrategyOccurrence) -> ReplayTradeResult:
         mae_30m_pct=occurrence.mae_30m,
         result=outcome,
         regime=occurrence.regime,
+    )
+
+
+def train_frozen_strategy(
+    development_candles: Sequence[Candle],
+    *,
+    development_sessions: int,
+) -> FrozenStrategySelection:
+    """Train/select one strategy using development candles only.
+
+    No blind candles are accepted by this function. The returned selection can
+    be serialized/frozen and then handed to a causal streaming engine.
+    """
+
+    ordered = tuple(sorted(development_candles, key=lambda item: item.at))
+    dates = sorted({
+        candle.at.astimezone(INDIA_TIME).date()
+        for candle in ordered
+    })
+    if len(dates) != development_sessions:
+        raise ValueError(
+            f"development candle set contains {len(dates)} sessions; "
+            f"{development_sessions} required"
+        )
+    if not ordered:
+        raise ValueError("development candles unavailable")
+    max_days = max(30, (ordered[-1].at - ordered[0].at).days + 3)
+    snapshot = analyze_strategies(
+        ordered,
+        (),
+        ordered[0].at,
+        ordered[-1].at,
+        max_days=max_days,
+    )
+    selected = _pick_strategy(snapshot, development_sessions)
+    return FrozenStrategySelection(
+        strategy_id=None if selected is None else selected.definition.strategy_id,
+        strategy_name=None if selected is None else selected.definition.name,
+        development_sessions=development_sessions,
+        training_start=dates[0].isoformat() if dates else None,
+        training_end=dates[-1].isoformat() if dates else None,
+        development=_metrics(selected, development_sessions),
+        candidates=tuple(
+            _candidate(item)
+            for item in snapshot.strategies
+            if item.definition.direction_scope != "PROCESS"
+        ),
+        occurrences=() if selected is None else selected.occurrences,
     )
 
 

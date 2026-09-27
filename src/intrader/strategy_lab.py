@@ -475,6 +475,34 @@ _DETECTORS: dict[str, Callable[[Sequence[Candle]], list[tuple[int, int]]]] = {
 }
 
 
+def detect_strategy_signal(
+    strategy_id: str,
+    candles: Sequence[Candle],
+) -> int | None:
+    """Return a causal signal for the newest candle only.
+
+    The detector receives only candles already observed by the simulated clock.
+    It never computes forward returns or reads future candles. A bounded history
+    containing the previous/current sessions is sufficient for all built-in
+    hypotheses.
+    """
+
+    detector = _DETECTORS.get(strategy_id)
+    if detector is None:
+        raise ValueError(f"unknown strategy: {strategy_id}")
+    ordered = tuple(sorted(candles, key=lambda candle: candle.at))
+    if not ordered:
+        return None
+    raw = detector(ordered)
+    newest = len(ordered) - 1
+    for index, direction in reversed(raw):
+        if index == newest:
+            return direction
+        if index < newest:
+            break
+    return None
+
+
 def _average(values: Sequence[Decimal | None]) -> Decimal | None:
     usable = [value for value in values if value is not None]
     if not usable:

@@ -606,6 +606,49 @@ class SQLiteStore:
             raise StorageError(f"SQLite time-range count failed for {table}") from None
         return 0 if row is None else int(row[0])
 
+    def distinct_snapshot_tokens(
+        self,
+        table: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple[str, ...]:
+        """Return deterministic distinct tokens for a snapshot table/range."""
+
+        allowed = {
+            "index_snapshots": "exchange_ts_utc",
+            "future_snapshots": "exchange_ts_utc",
+            "option_snapshots": "exchange_ts_utc",
+            "breadth_snapshots": "exchange_ts_utc",
+        }
+        timestamp_column = allowed.get(table)
+        if timestamp_column is None:
+            raise StorageError("snapshot token table unsupported")
+        clauses: list[str] = []
+        params: list[object] = []
+        if start is not None:
+            if start.tzinfo is None:
+                raise StorageError("snapshot token start must be timezone aware")
+            clauses.append(f"{timestamp_column} >= ?")
+            params.append(_utc_iso(start))
+        if end is not None:
+            if end.tzinfo is None:
+                raise StorageError("snapshot token end must be timezone aware")
+            clauses.append(f"{timestamp_column} <= ?")
+            params.append(_utc_iso(end))
+        if start is not None and end is not None and start > end:
+            raise StorageError("snapshot token range invalid")
+        query = f"SELECT DISTINCT token FROM {table}"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY token ASC"
+        try:
+            rows = self._connection.execute(query, params).fetchall()
+        except sqlite3.Error:
+            raise StorageError("SQLite snapshot token read failed") from None
+        return tuple(str(row[0]) for row in rows if row[0] is not None)
+
+
     def load_option_snapshots(
         self,
         *,

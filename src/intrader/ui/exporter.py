@@ -112,11 +112,13 @@ def export_shadow_review_bundle(
         performance_payload = None
 
     payload = {
-        "schema": "intrader-shadow-review-v2-arena",
+        "schema": "intrader-shadow-review-v3-research-engine",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "replay_configuration": {
             **asdict(config),
             "total_sessions": config.total_sessions,
+            "required_sessions": config.required_sessions,
+            "walk_required_sessions": config.walk_required_sessions,
             "mode_label": mode.label,
             "requested_touchpoints": mode.feature_count,
             "feature_families": mode.families,
@@ -144,10 +146,13 @@ def export_shadow_review_bundle(
         ],
         "reason_audits": [asdict(audit) for audit in audits],
         "review_notes": [
-            "Compare each timeframe trader independently before combining them.",
-            "Do not tune the frozen blind block after seeing its results.",
+            "Compare each timeframe frozen engine independently before combining them.",
+            "A blind window becomes diagnostic-only after its results have been reviewed.",
+            "Use ablation results to judge whether each wired feature family improves the same blind dates.",
+            "Use walk-forward windows to judge stability across changing market regimes.",
+            "Rejected-signal outcomes distinguish good filters from missed profitable setups.",
             "Missing historical families must remain missing; never infer expired option data.",
-            "Upload this JSON back into ChatGPT for timeframe, drawdown, expectancy and rejected-signal review.",
+            "Upload this JSON back into ChatGPT for timeframe, drawdown, expectancy, ablation, regime and rejected-signal review.",
         ],
     }
     target.parent.mkdir(parents=True, exist_ok=True)

@@ -30,9 +30,11 @@ from intrader.shadow_lab import (
     DEFAULT_SHADOW_LAB_PLAN,
     DEFAULT_TRADER_TIMEFRAMES,
     FEATURE_FAMILIES,
+    EXECUTION_MODES,
     MAX_REPLAY_SESSION_INPUT,
     NEWS_RESOURCES,
     REPLAY_MODES,
+    VALIDATION_MODES,
     ShadowReplayConfig,
     replay_mode,
     validate_replay_config,
@@ -216,7 +218,51 @@ class ShadowTraderPage(QWidget):
         self.friction_bps.setSuffix(" bps / trade")
         grid.addWidget(self.friction_bps, 1, 5)
 
-        grid.addWidget(QLabel("Parallel traders"), 2, 0)
+        grid.addWidget(QLabel("Validation"), 2, 0)
+        self.validation_mode = QComboBox()
+        self.validation_mode.addItem("Standard frozen blind", "STANDARD")
+        self.validation_mode.addItem("Walk-forward + frozen blind", "WALK_FORWARD")
+        grid.addWidget(self.validation_mode, 2, 1)
+
+        grid.addWidget(QLabel("Execution"), 2, 2)
+        self.execution_mode = QComboBox()
+        self.execution_mode.addItem("NIFTY proxy", "PROXY")
+        self.execution_mode.addItem("Exact option premium (when available)", "OPTION_PREMIUM")
+        self.execution_mode.setToolTip(
+            "Exact option mode requires timestamped historical option premiums. "
+            "Intrader will refuse it when the data is unavailable."
+        )
+        grid.addWidget(self.execution_mode, 2, 3)
+
+        grid.addWidget(QLabel("Walk train / test"), 2, 4)
+        walk_row = QHBoxLayout()
+        self.walk_train_days = QSpinBox()
+        self.walk_train_days.setRange(1, MAX_REPLAY_SESSION_INPUT)
+        self.walk_train_days.setValue(60)
+        self.walk_train_days.setSuffix(" train")
+        self.walk_test_days = QSpinBox()
+        self.walk_test_days.setRange(1, MAX_REPLAY_SESSION_INPUT)
+        self.walk_test_days.setValue(15)
+        self.walk_test_days.setSuffix(" test")
+        walk_row.addWidget(self.walk_train_days)
+        walk_row.addWidget(self.walk_test_days)
+        grid.addLayout(walk_row, 2, 5)
+
+        grid.addWidget(QLabel("Walk step / windows"), 3, 0)
+        walk_step_row = QHBoxLayout()
+        self.walk_step_days = QSpinBox()
+        self.walk_step_days.setRange(1, MAX_REPLAY_SESSION_INPUT)
+        self.walk_step_days.setValue(15)
+        self.walk_step_days.setSuffix(" step")
+        self.walk_windows = QSpinBox()
+        self.walk_windows.setRange(1, 20)
+        self.walk_windows.setValue(4)
+        self.walk_windows.setSuffix(" windows")
+        walk_step_row.addWidget(self.walk_step_days)
+        walk_step_row.addWidget(self.walk_windows)
+        grid.addLayout(walk_step_row, 3, 1, 1, 2)
+
+        grid.addWidget(QLabel("Parallel traders"), 3, 3)
         trader_row = QHBoxLayout()
         self.trader_checks: dict[int, QCheckBox] = {}
         for timeframe in DEFAULT_TRADER_TIMEFRAMES:
@@ -225,7 +271,7 @@ class ShadowTraderPage(QWidget):
             self.trader_checks[timeframe] = check
             trader_row.addWidget(check)
         trader_row.addStretch(1)
-        grid.addLayout(trader_row, 2, 1, 1, 5)
+        grid.addLayout(trader_row, 3, 4, 1, 2)
         controls.layout_box.addLayout(grid)
 
         self.mode_description = QLabel()
@@ -278,8 +324,8 @@ class ShadowTraderPage(QWidget):
         integrity = Card("INTEGRITY RULES")
         label = QLabel(
             "No look-ahead. Blind rules are frozen. Four timeframe traders are independent. "
-            "Each gets the same fake starting capital. Only one 30-minute proxy position may "
-            "be open per timeframe; overlapping signals are recorded as rejected. Historical "
+            "Each gets the same fake starting capital. Holding horizon is timeframe-specific "
+            "(1M=10m, 5M=30m, 10M=45m, 15M=60m). Overlapping signals are recorded as rejected. Historical "
             "option premiums are never invented."
         )
         label.setWordWrap(True)
@@ -294,6 +340,12 @@ class ShadowTraderPage(QWidget):
             self.starting_capital,
             self.allocation_pct,
             self.friction_bps,
+            self.validation_mode,
+            self.execution_mode,
+            self.walk_train_days,
+            self.walk_test_days,
+            self.walk_step_days,
+            self.walk_windows,
         ):
             if hasattr(widget, "valueChanged"):
                 widget.valueChanged.connect(self._sync_replay_controls)
@@ -421,7 +473,7 @@ class ShadowTraderPage(QWidget):
 
         note = QLabel(
             "Development is research visualization. Blind is the authentic frozen test. "
-            "Outcome and paper P&L are revealed only after simulated time reaches +30 minutes."
+            "Outcome and paper P&L are revealed only when each frozen engine reaches its own causal exit timestamp."
         )
         note.setWordWrap(True)
         note.setObjectName("Muted")
@@ -478,11 +530,32 @@ class ShadowTraderPage(QWidget):
         coverage.add_widget(self.results_coverage)
         root.addWidget(coverage)
 
+        ablation = Card("ABLATION — SAME BLIND DATES")
+        self.results_ablation = DataTable(
+            ["Trader", "Variant", "Families", "Trades", "Net P&L", "Return", "PF", "Max DD"]
+        )
+        ablation.add_widget(self.results_ablation)
+        root.addWidget(ablation)
+
+        walk = Card("WALK-FORWARD WINDOWS")
+        self.results_walk_forward = DataTable(
+            ["Trader", "Window", "Train", "Test", "Engine", "Trades", "Net P&L", "Return", "PF", "Max DD"]
+        )
+        walk.add_widget(self.results_walk_forward)
+        root.addWidget(walk)
+
+        slices = Card("REGIME + TIME-OF-DAY")
+        self.results_slices = DataTable(
+            ["Trader", "Slice Type", "Slice", "Trades", "Wins", "Losses", "Avg Return", "Net P&L", "PF"]
+        )
+        slices.add_widget(self.results_slices)
+        root.addWidget(slices)
+
         tournament = Card("TIMEFRAME TOURNAMENT — BLIND PHASE")
         self.results_tournament = DataTable(
             [
-                "Trader", "Engine ID", "Frozen Strategy", "Trades", "Wins", "Losses", "Win Rate",
-                "Avg Net 30m", "Profit Factor", "Start", "End", "Net P&L", "Return", "Max DD",
+                "Trader", "Engine ID", "Frozen Strategy", "Hold", "Trades", "Wins", "Losses", "Win Rate",
+                "Avg Net Return", "Profit Factor", "Start", "End", "Net P&L", "Return", "Max DD",
             ]
         )
         tournament.add_widget(self.results_tournament)
@@ -491,15 +564,17 @@ class ShadowTraderPage(QWidget):
         trades = Card("TRADE-BY-TRADE PAPER REPLAY")
         self.results_trades = DataTable(
             [
-                "Trader", "Phase", "Time", "Direction", "Entry", "Approx Exit",
-                "Gross 30m", "Net 30m", "Paper P&L", "Balance", "Result",
+                "Trader", "Opened", "Closed", "Hold", "Direction", "Entry", "Exit",
+                "Gross", "Net", "Paper P&L", "Balance", "Regime", "Time Bucket", "Exit", "Result",
             ]
         )
         trades.add_widget(self.results_trades)
         root.addWidget(trades)
 
         rejected = Card("REJECTED SIGNALS")
-        self.results_rejected = DataTable(["Trader", "Phase", "Time", "Direction", "Reason"])
+        self.results_rejected = DataTable(
+            ["Trader", "Time", "Direction", "Reason", "Hypothetical Return", "Hypothetical P&L", "Classification"]
+        )
         rejected.add_widget(self.results_rejected)
         root.addWidget(rejected)
 
@@ -599,6 +674,12 @@ class ShadowTraderPage(QWidget):
                 development_sessions=self.development_days.value(),
                 blind_sessions=self.blind_days.value(),
                 mode_key=str(self.replay_mode.currentData()),
+                validation_mode=str(self.validation_mode.currentData()),
+                walk_train_sessions=self.walk_train_days.value(),
+                walk_test_sessions=self.walk_test_days.value(),
+                walk_step_sessions=self.walk_step_days.value(),
+                walk_windows=self.walk_windows.value(),
+                execution_mode=str(self.execution_mode.currentData()),
                 starting_capital=Decimal(str(self.starting_capital.value())),
                 allocation_pct=Decimal(str(self.allocation_pct.value())),
                 friction_bps=Decimal(str(self.friction_bps.value())),
@@ -633,10 +714,13 @@ class ShadowTraderPage(QWidget):
         )
         self.split_text.setText(
             f"{config.development_sessions} development + {config.blind_sessions} blind = "
-            f"{config.total_sessions} trading sessions. Blind starts only after all timeframe "
-            "strategies are frozen. Source availability is the final historical limit."
+            f"{config.total_sessions} standard sessions. Validation={config.validation_mode}. "
+            f"Required history={config.required_sessions} sessions. Blind starts only after all "
+            "timeframe strategies are frozen. Source availability is the final historical limit."
         )
-        self.setup_total_metric.set_value(str(config.total_sessions))
+        self.setup_total_metric.set_value(
+            f"{config.total_sessions} / req {config.required_sessions}"
+        )
         self.setup_dev_metric.set_value(str(config.development_sessions))
         self.setup_blind_metric.set_value(str(config.blind_sessions))
         self.setup_money_metric.set_value(f"₹{config.starting_capital:,.0f}")
@@ -705,7 +789,7 @@ class ShadowTraderPage(QWidget):
             f"{coverage.decision_used_touchpoints} / {coverage.requested_touchpoints}"
         )
         self.results_available_metric.set_value(
-            f"{len(coverage.available_families)} / {len(coverage.requested_families)}"
+            f"{coverage.available_touchpoints} / {coverage.requested_touchpoints}"
         )
         self.results_engines_metric.set_value(str(len(report.trader_reports)))
         self.results_coverage.set_rows(
@@ -731,6 +815,7 @@ class ShadowTraderPage(QWidget):
                     trader.trader_label,
                     trader.engine_id,
                     trader.selected_strategy_name or "None",
+                    f"{trader.hold_minutes}m",
                     metrics.trades,
                     metrics.wins,
                     metrics.losses,
@@ -748,15 +833,19 @@ class ShadowTraderPage(QWidget):
                 trade_rows.append(
                     [
                         trader.trader_label,
-                        trade.phase,
-                        trade.at.replace("T", " ")[:16],
+                        trade.opened_at.replace("T", " ")[:16],
+                        trade.closed_at.replace("T", " ")[:16],
+                        f"{trade.hold_minutes}m",
                         trade.direction,
                         f"{trade.entry_underlying:.2f}",
-                        "N/A" if trade.approx_exit_underlying_30m is None else f"{trade.approx_exit_underlying_30m:.2f}",
-                        self._fmt_pct(trade.gross_return_30m_pct, 4),
-                        self._fmt_pct(trade.net_return_30m_pct, 4),
+                        f"{trade.exit_underlying:.2f}",
+                        self._fmt_pct(trade.gross_return_pct, 4),
+                        self._fmt_pct(trade.net_return_pct, 4),
                         self._fmt_money(trade.paper_pnl),
                         self._fmt_money(trade.paper_balance_after),
+                        trade.regime,
+                        trade.time_bucket,
+                        trade.exit_reason,
                         trade.result,
                     ]
                 )
@@ -764,16 +853,72 @@ class ShadowTraderPage(QWidget):
                 rejected_rows.append(
                     [
                         rejected.trader_label,
-                        rejected.phase,
                         rejected.at.replace("T", " ")[:16],
                         rejected.direction,
                         rejected.reason,
+                        self._fmt_pct(rejected.hypothetical_return_pct, 4),
+                        self._fmt_money(rejected.hypothetical_pnl),
+                        rejected.classification,
                     ]
                 )
 
+        ablation_rows = [
+            [
+                item.trader_label,
+                item.label,
+                ", ".join(item.families) or "Strategy only",
+                item.trades,
+                self._fmt_money(item.net_pnl),
+                self._fmt_pct(item.return_pct, 3),
+                self._fmt_number(item.profit_factor, 3),
+                self._fmt_pct(item.max_drawdown_pct, 3),
+            ]
+            for item in report.ablation_results
+        ]
+        walk_rows = [
+            [
+                item.trader_label,
+                item.window_index,
+                f"{item.training_start} → {item.training_end}",
+                f"{item.test_start} → {item.test_end}",
+                item.engine_id,
+                item.trades,
+                self._fmt_money(item.net_pnl),
+                self._fmt_pct(item.return_pct, 3),
+                self._fmt_number(item.profit_factor, 3),
+                self._fmt_pct(item.max_drawdown_pct, 3),
+            ]
+            for item in report.walk_forward_results
+        ]
+        slice_rows = []
+        for trader in report.trader_reports:
+            for item in trader.regime_stats:
+                slice_rows.append(
+                    [
+                        trader.trader_label, "REGIME", item.key, item.trades,
+                        item.wins, item.losses,
+                        self._fmt_pct(item.average_return_pct, 4),
+                        self._fmt_money(item.net_pnl),
+                        self._fmt_number(item.profit_factor, 3),
+                    ]
+                )
+            for item in trader.time_stats:
+                slice_rows.append(
+                    [
+                        trader.trader_label, "TIME", item.key, item.trades,
+                        item.wins, item.losses,
+                        self._fmt_pct(item.average_return_pct, 4),
+                        self._fmt_money(item.net_pnl),
+                        self._fmt_number(item.profit_factor, 3),
+                    ]
+                )
+
+        self.results_ablation.set_rows(ablation_rows)
+        self.results_walk_forward.set_rows(walk_rows)
+        self.results_slices.set_rows(slice_rows)
         self.results_tournament.set_rows(tournament_rows)
-        self.results_trades.set_rows(sorted(trade_rows, key=lambda row: row[2]))
-        self.results_rejected.set_rows(sorted(rejected_rows, key=lambda row: row[2]))
+        self.results_trades.set_rows(sorted(trade_rows, key=lambda row: row[1]))
+        self.results_rejected.set_rows(sorted(rejected_rows, key=lambda row: row[1]))
         self.results_export_button.setEnabled(True)
         if open_results:
             self.tabs.setCurrentIndex(self.results_tab_index)
@@ -786,8 +931,8 @@ class ShadowTraderPage(QWidget):
         events = []
         for trader in report.trader_reports:
             for trade in trader.trades:
-                events.append((datetime.fromisoformat(trade.at), "OPEN", trade))
-                events.append((datetime.fromisoformat(trade.at) + timedelta(minutes=30), "CLOSE", trade))
+                events.append((datetime.fromisoformat(trade.opened_at), "OPEN", trade))
+                events.append((datetime.fromisoformat(trade.closed_at), "CLOSE", trade))
             for rejected in trader.rejected_signals:
                 events.append((datetime.fromisoformat(rejected.at), "REJECT", rejected))
         self._playback_events = tuple(sorted(events, key=lambda item: (item[0], item[1])))
@@ -915,7 +1060,7 @@ class ShadowTraderPage(QWidget):
                 self._append_event_row(
                     [
                         at.strftime("%d %b %H:%M"),
-                        payload.phase,
+                        "BLIND",
                         payload.trader_label,
                         "REJECT",
                         payload.direction,
@@ -932,7 +1077,7 @@ class ShadowTraderPage(QWidget):
                 self._append_event_row(
                     [
                         at.strftime("%d %b %H:%M"),
-                        payload.phase,
+                        "BLIND",
                         payload.trader_label,
                         "OPEN",
                         payload.direction,
@@ -960,12 +1105,12 @@ class ShadowTraderPage(QWidget):
             self._append_event_row(
                 [
                     at.strftime("%d %b %H:%M"),
-                    payload.phase,
+                    "BLIND",
                     payload.trader_label,
-                    "CLOSE +30m",
+                    f"CLOSE {payload.hold_minutes}m",
                     payload.direction,
                     f"{payload.entry_underlying:.2f}",
-                    "N/A" if payload.approx_exit_underlying_30m is None else f"{payload.approx_exit_underlying_30m:.2f}",
+                    f"{payload.exit_underlying:.2f}",
                     self._fmt_money(payload.paper_pnl),
                     payload.result,
                 ]

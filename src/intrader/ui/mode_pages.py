@@ -14,8 +14,9 @@ import pyqtgraph as pg
 
 from intrader.historical import INDIA_TIME
 from intrader.ui.components import (
-    BEARISH_COLOR, BULLISH_COLOR, Card, DataTable, DecisionCard, MarketChart,
-    MetricCard, MetricRibbon, ReasonList, ResponsiveMetricGrid, TextPanel,
+    BEARISH_COLOR, BULLISH_COLOR, BulletList, Card, DataTable, DecisionCard,
+    DotMatrix, MarketChart, MetricCard, MetricRibbon, ReasonList,
+    ResponsiveMetricGrid, TextPanel,
 )
 
 
@@ -124,117 +125,233 @@ class IntraderModePage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 34)
-        root.setSpacing(8)
+        root.setContentsMargins(14, 12, 14, 36)
+        root.setSpacing(10)
 
-        title_row = QHBoxLayout()
-        title = QLabel("Intrader Mode")
-        title.setObjectName("PageTitle")
-        self.session_label = QLabel("Live market operation + shadow trading")
-        self.session_label.setObjectName("Muted")
-        title_row.addWidget(title)
-        title_row.addStretch(1)
-        title_row.addWidget(self.session_label)
-        root.addLayout(title_row)
-
-        self.decision = DecisionCard()
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        dots = DotMatrix(columns=4, rows=3)
+        status_row.addWidget(dots)
         self.metrics = MetricRibbon([
+            ("WAITING", "No Action"),
             ("DIRECTION", "N/A"),
             ("CONFIDENCE", "N/A"),
-            ("ENTRY", "N/A"),
-            ("REVERSAL", "N/A"),
-            ("REGIME", "N/A"),
+            ("ENTRY QUALITY", "N/A"),
+            ("REVERSAL RISK", "N/A"),
         ])
-
-        top = QHBoxLayout()
-        top.addWidget(self.decision, 2)
-        top.addWidget(self.metrics, 5)
-        root.addLayout(top)
+        status_row.addWidget(self.metrics, 1)
+        root.addLayout(status_row)
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.chart = MarketChart()
-        self.chart.setMinimumHeight(255)
-        self.main_splitter.addWidget(self.chart)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+
+        self.chart = MarketChart("NIFTY 50")
+        self.chart.setMinimumHeight(330)
+        left_layout.addWidget(self.chart, 3)
+
+        reasoning = Card()
+        reason_row = QHBoxLayout()
+        reason_row.setContentsMargins(2, 0, 2, 0)
+        reason_row.setSpacing(18)
+
+        why_box = QWidget()
+        why_layout = QVBoxLayout(why_box)
+        why_layout.setContentsMargins(6, 2, 6, 2)
+        why_title = QLabel("↗  Why this action")
+        why_title.setObjectName("SectionTitle")
+        self.why = BulletList()
+        why_layout.addWidget(why_title)
+        why_layout.addWidget(self.why, 1)
+
+        why_not_box = QWidget()
+        why_not_layout = QVBoxLayout(why_not_box)
+        why_not_layout.setContentsMargins(6, 2, 6, 2)
+        why_not_title = QLabel("↘  Why not the opposite")
+        why_not_title.setObjectName("SectionTitle")
+        self.why_not = BulletList()
+        why_not_layout.addWidget(why_not_title)
+        why_not_layout.addWidget(self.why_not, 1)
+
+        context_box = QWidget()
+        context_layout = QVBoxLayout(context_box)
+        context_layout.setContentsMargins(6, 2, 6, 2)
+        context_title = QLabel("Context")
+        context_title.setObjectName("SectionTitle")
+        self.context_text = QLabel("No live context snapshot yet.")
+        self.context_text.setObjectName("Muted")
+        self.context_text.setWordWrap(True)
+        context_layout.addWidget(context_title)
+        context_layout.addWidget(self.context_text, 1)
+
+        reason_row.addWidget(why_box, 2)
+        reason_row.addWidget(why_not_box, 2)
+        reason_row.addWidget(context_box, 1)
+        reasoning.layout_box.addLayout(reason_row)
+        reasoning.setMinimumHeight(175)
+        left_layout.addWidget(reasoning, 1)
+
+        self.main_splitter.addWidget(left)
 
         right_widget = QWidget()
         right = QVBoxLayout(right_widget)
         right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(8)
-        self.shadow = Card("SHADOW TRADE")
-        self.shadow_text = QLabel("No active shadow position.")
+        right.setSpacing(10)
+
+        self.shadow = Card()
+        shadow_head = QHBoxLayout()
+        shadow_title = QLabel("●  Shadow Trade")
+        shadow_title.setObjectName("SectionTitle")
+        shadow_head.addWidget(shadow_title)
+        shadow_head.addStretch(1)
+        paper = QLabel("Paper Mode")
+        paper.setObjectName("Muted")
+        shadow_head.addWidget(paper)
+        self.shadow.layout_box.addLayout(shadow_head)
+        self.shadow_text = QLabel("No active position")
         self.shadow_text.setWordWrap(True)
-        self.shadow.add_widget(self.shadow_text)
-        right.addWidget(self.shadow)
+        self.shadow_text.setObjectName("Muted")
+        self.shadow.layout_box.addWidget(self.shadow_text)
+        right.addWidget(self.shadow, 1)
 
-        self.news = Card("GLOBAL NEWS / EVENTS")
+        interpretation = Card()
+        interpretation_head = QHBoxLayout()
+        interpretation_title = QLabel("Current Interpretation")
+        interpretation_title.setObjectName("SectionTitle")
+        interpretation_head.addWidget(interpretation_title)
+        interpretation_head.addStretch(1)
+        interpretation_head.addWidget(DotMatrix(columns=4, rows=3))
+        interpretation.layout_box.addLayout(interpretation_head)
+        self.interpretation_values: dict[str, QLabel] = {}
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(7)
+        for row_index, (key, label) in enumerate((
+            ("PRICE", "Price Action"),
+            ("FUTURES", "Futures"),
+            ("OPTIONS", "Options Flow"),
+            ("BREADTH", "Market Breadth"),
+            ("ORDER_FLOW", "Order Flow"),
+        )):
+            name = QLabel(label)
+            name.setObjectName("Muted")
+            value = QLabel("N/A")
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.interpretation_values[key] = value
+            grid.addWidget(name, row_index, 0)
+            grid.addWidget(value, row_index, 1)
+        interpretation.layout_box.addLayout(grid)
+        self.interpretation_summary = QLabel("Waiting for a verified Market Brain decision.")
+        self.interpretation_summary.setWordWrap(True)
+        self.interpretation_summary.setObjectName("Muted")
+        interpretation.layout_box.addWidget(self.interpretation_summary)
+        right.addWidget(interpretation, 2)
+
+        self.news = Card()
+        news_head = QHBoxLayout()
+        news_title = QLabel("Global News / Events")
+        news_title.setObjectName("SectionTitle")
+        news_head.addWidget(news_title)
+        news_head.addStretch(1)
+        view_all = QLabel("View All  →")
+        view_all.setObjectName("Muted")
+        news_head.addWidget(view_all)
+        self.news.layout_box.addLayout(news_head)
         self.news_table = DataTable(["Time", "Source", "Headline / Event"])
-        self.news.add_widget(self.news_table)
-        right.addWidget(self.news, 1)
-        self.main_splitter.addWidget(right_widget)
-        self.main_splitter.setStretchFactor(0, 6)
-        self.main_splitter.setStretchFactor(1, 4)
-        root.addWidget(self.main_splitter, 1)
+        self.news.layout_box.addWidget(self.news_table)
+        right.addWidget(self.news, 3)
 
-        self.reason_tabs = QTabWidget()
-        self.why = ReasonList("WHY THIS ACTION")
-        self.why_not = ReasonList("WHY NOT THE OPPOSITE")
-        self.reason_tabs.addTab(self.why, "Why this action")
-        self.reason_tabs.addTab(self.why_not, "Why not the opposite")
-        self.reason_tabs.setMaximumHeight(190)
-        root.addWidget(self.reason_tabs)
+        self.main_splitter.addWidget(right_widget)
+        self.main_splitter.setStretchFactor(0, 64)
+        self.main_splitter.setStretchFactor(1, 36)
+        root.addWidget(self.main_splitter, 1)
 
     def resizeEvent(self, event) -> None:
         self.main_splitter.setOrientation(
             Qt.Orientation.Vertical
-            if event.size().width() < 1000
+            if event.size().width() < 1050
             else Qt.Orientation.Horizontal
         )
         super().resizeEvent(event)
 
     def apply_layout_preset(self, preset: str) -> None:
         width = max(1, self.width())
-        if preset == "Analysis":
-            self.main_splitter.setSizes([int(width * 0.80), int(width * 0.20)])
-            self.reason_tabs.setMaximumHeight(150)
-        elif preset == "Monitoring":
-            self.main_splitter.setSizes([int(width * 0.58), int(width * 0.42)])
-            self.reason_tabs.setMaximumHeight(120)
-        elif preset == "Compact":
-            self.main_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
-            self.reason_tabs.setMaximumHeight(120)
+        if self.main_splitter.orientation() == Qt.Orientation.Horizontal:
+            self.main_splitter.setSizes([int(width * 0.64), int(width * 0.36)])
+
+    def _set_interpretation(self, decision) -> None:
+        family_map = {family.name: family.value for family in decision.families}
+        states = []
+        for key, label in self.interpretation_values.items():
+            value = family_map.get(key)
+            if value is None:
+                state = "N/A"
+                object_name = "Muted"
+            elif value > Decimal("0.15"):
+                state = "Bullish"
+                object_name = "Positive"
+                states.append("bullish")
+            elif value < Decimal("-0.15"):
+                state = "Bearish"
+                object_name = "Negative"
+                states.append("bearish")
+            else:
+                state = "Neutral"
+                object_name = "Muted"
+                states.append("neutral")
+            label.setText(state)
+            label.setObjectName(object_name)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+        if decision.action == "WAIT":
+            summary = "Mixed confirmation. Entry conditions are not strong enough for a shadow entry."
+        elif decision.action == "NO_TRADE":
+            summary = "Safety gates are active. Intrader is deliberately standing aside."
+        elif decision.action == "BUY_CALL":
+            summary = "Bullish evidence is leading the current Market Brain thesis."
+        elif decision.action == "BUY_PUT":
+            summary = "Bearish evidence is leading the current Market Brain thesis."
         else:
-            self.main_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
-            self.reason_tabs.setMaximumHeight(190)
+            summary = f"{decision.brain_state} • {decision.regime}"
+        self.interpretation_summary.setText(summary)
 
     def refresh_snapshot(self, snapshot) -> None:
         decision = snapshot.latest_decision
         if decision is None:
-            self.decision.set_decision(
-                "WAITING FOR DATA",
-                "No immutable Market Brain decision recorded yet.",
-            )
-            for key in ("DIRECTION", "CONFIDENCE", "ENTRY", "REVERSAL", "REGIME"):
+            self.metrics.set_metric("WAITING", "No Action")
+            for key in ("DIRECTION", "CONFIDENCE", "ENTRY QUALITY", "REVERSAL RISK"):
                 self.metrics.set_metric(key, "N/A")
             self.why.set_reasons([])
             self.why_not.set_reasons([])
+            self.context_text.setText("No verified live context snapshot yet.")
+            for label in self.interpretation_values.values():
+                label.setText("N/A")
+                label.setObjectName("Muted")
+            self.interpretation_summary.setText(
+                "Waiting for a verified Market Brain decision."
+            )
         else:
-            self.decision.set_decision(
-                decision.action,
-                f"{decision.brain_state} • {decision.brain_version}",
+            action_tone = (
+                "positive" if decision.action == "BUY_CALL"
+                else "negative" if decision.action == "BUY_PUT"
+                else "neutral"
             )
+            self.metrics.set_metric("WAITING", decision.action.replace("_", " "), action_tone)
             self.metrics.set_metric(
-                "DIRECTION",
-                str(decision.direction_score),
-                _tone(decision.direction_score),
+                "DIRECTION", str(decision.direction_score), _tone(decision.direction_score)
             )
-            self.metrics.set_metric("CONFIDENCE", str(decision.confidence))
-            self.metrics.set_metric("ENTRY", str(decision.entry_quality))
+            self.metrics.set_metric("CONFIDENCE", f"{decision.confidence}%")
+            self.metrics.set_metric("ENTRY QUALITY", str(decision.entry_quality))
             self.metrics.set_metric(
-                "REVERSAL",
+                "REVERSAL RISK",
                 str(decision.reversal_risk),
                 "negative" if decision.reversal_risk > 70 else "neutral",
             )
-            self.metrics.set_metric("REGIME", decision.regime)
             self.why.set_reasons([
                 (r.reason_code, r.explanation)
                 for r in decision.reasons
@@ -245,35 +362,44 @@ class IntraderModePage(QWidget):
                 for r in decision.reasons
                 if r.thesis == "REJECTED"
             ])
+            self._set_interpretation(decision)
+            self.context_text.setText(
+                f"Higher TF trend   {decision.regime}\n"
+                f"Spot              {decision.spot_price}\n"
+                f"VIX               {decision.vix}\n"
+                f"Basis             {decision.basis}\n"
+                f"Breadth            {_text(decision.breadth_pct)}"
+            )
 
         trade = snapshot.active_shadow_trade
         if trade is None:
             self.shadow_text.setText(
-                "No active shadow position. Completed trades and P&L remain in Analysis."
+                "No active shadow position.\n"
+                "Paper-mode entries will appear here when the Market Brain qualifies one."
             )
         else:
             self.shadow_text.setText(
                 f"{trade.action} • {trade.strike} {trade.option_type}\n"
-                f"Entry {trade.entry_price}   Stop {trade.stop_price}\n"
-                f"Target {trade.target_price}   Qty {trade.quantity}\n"
-                f"Version {trade.shadow_version} • Max {trade.max_minutes} min"
+                f"Entry  {trade.entry_price}     Stop  {trade.stop_price}\n"
+                f"Target {trade.target_price}     Qty   {trade.quantity}\n"
+                f"Max hold {trade.max_minutes} min • {trade.shadow_version}"
             )
 
         rows = []
-        for event in snapshot.upcoming_events[:6]:
+        for event in snapshot.upcoming_events[:5]:
             rows.append([
                 event.scheduled_at.astimezone(INDIA_TIME).strftime("%H:%M"),
                 event.source,
                 event.name,
             ])
-        for item in snapshot.recent_news[:8]:
+        for item in snapshot.recent_news[:7]:
             rows.append([
                 item.published_at.astimezone(INDIA_TIME).strftime("%H:%M"),
                 item.source,
                 item.title,
             ])
         self.news_table.set_rows(
-            rows[:10] or [["—", "—", "No recent market context. Refresh when needed."]]
+            rows[:8] or [["—", "—", "No relevant market context cached yet."]]
         )
 
     def set_candles(self, candles) -> None:

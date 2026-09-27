@@ -101,7 +101,7 @@ def test_time_travel_range_results_render_without_fake_data() -> None:
 
     page.set_range_analysis(analysis, opening, ())
 
-    assert page.range_metrics.value("NIFTY") == "N/A"
+    assert page.range_metrics.value("NIFTY CHANGE") == "N/A"
     assert page.range_metrics.value("SESSIONS") == "0"
     assert page.range_coverage.rowCount() == 1
     assert "No evidence available." in page.range_notes.text.toPlainText()
@@ -238,3 +238,25 @@ def test_30m_candle_aggregation_is_anchored_to_market_open() -> None:
     assert len(rows) == 2
     assert rows[0][0] == start.timestamp()
     assert rows[1][0] == (start + timedelta(minutes=30)).timestamp()
+
+
+
+def test_time_travel_defaults_to_approved_range_workspace() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = TimeTravelPage()
+
+    assert page.tabs.currentIndex() == 1
+    assert page.tabs.tabBar().isVisible() is False
+    assert page.replay_view_button.text() == "30m Replay"
+    assert page.range_view_button.text() == "Range Analysis"
+
+
+def test_intrader_mode_uses_one_screen_workstation_sections() -> None:
+    app = QApplication.instance() or QApplication([])
+    page = IntraderModePage()
+
+    assert page.metrics.value("WAITING") == "No Action"
+    assert page.chart._title == "NIFTY 50"
+    assert set(page.interpretation_values) == {
+        "PRICE", "FUTURES", "OPTIONS", "BREADTH", "ORDER_FLOW"
+    }

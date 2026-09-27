@@ -5,7 +5,11 @@ from intrader.shadow_lab import (
     DEFAULT_SHADOW_LAB_PLAN,
     FEATURE_FAMILIES,
     NEWS_RESOURCES,
+    REPLAY_MODES,
+    REPLAY_SESSION_OPTIONS,
+    development_blind_split,
     flattened_features,
+    replay_mode,
 )
 
 
@@ -50,3 +54,17 @@ def test_expired_options_are_explicitly_pending() -> None:
     assert "Upstox" in source
     assert status == "PENDING"
     assert "Angel One" in rule
+
+
+def test_replay_ranges_and_splits_are_locked() -> None:
+    assert REPLAY_SESSION_OPTIONS == (30, 60, 90)
+    assert development_blind_split(30) == (20, 10)
+    assert development_blind_split(60) == (40, 20)
+    assert development_blind_split(90) == (60, 30)
+
+
+def test_low_medium_high_touchpoints_are_monotonic() -> None:
+    assert [mode.key for mode in REPLAY_MODES] == ["LOW", "MEDIUM", "HIGH"]
+    assert replay_mode("LOW").feature_count == 15
+    assert replay_mode("MEDIUM").feature_count == 30
+    assert replay_mode("HIGH").feature_count == 50

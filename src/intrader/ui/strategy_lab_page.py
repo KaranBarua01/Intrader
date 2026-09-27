@@ -40,8 +40,8 @@ class StrategyLabPage(QWidget):
         self._visible_occurrences = ()
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 34)
-        root.setSpacing(8)
+        root.setContentsMargins(14, 12, 14, 36)
+        root.setSpacing(10)
 
         header = QHBoxLayout()
         title = QLabel("Strategy Lab")
@@ -54,6 +54,7 @@ class StrategyLabPage(QWidget):
         )
         header.addWidget(badge)
         header.addStretch(1)
+        header.addWidget(DotMatrix(columns=4, rows=3))
         root.addLayout(header)
 
         explainer = QLabel(
@@ -297,6 +298,11 @@ class StrategyLabPage(QWidget):
             ]
             for strategy in self._visible_strategies
         ])
+        for column, width in {
+            0: 150, 1: 165, 2: 48, 3: 52, 4: 52, 5: 62,
+            6: 62, 7: 62, 8: 72, 9: 72, 10: 72, 11: 105,
+        }.items():
+            self.strategy_table.setColumnWidth(column, width)
         if self._visible_strategies:
             self.strategy_table.selectRow(0)
             self._show_strategy(0)

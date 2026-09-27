@@ -16,7 +16,7 @@ def _synthetic_sessions(count: int) -> tuple[Candle, ...]:
         if day.weekday() < 5:
             start = datetime.combine(day, time(9, 15), INDIA_TIME)
             session_base = base + Decimal(built * 20)
-            for minute in range(40):
+            for minute in range(80):
                 open_ = session_base + Decimal(minute)
                 close = open_ + Decimal("0.8")
                 candles.append(
@@ -54,7 +54,7 @@ def test_candle_proxy_replay_uses_development_then_blind() -> None:
 def test_replay_never_needs_future_session_to_form_report() -> None:
     candles = _synthetic_sessions(31)
     report_30 = run_candle_proxy_replay(
-        candles[:-40],
+        candles[:-80],
         sessions=30,
         mode_key="MEDIUM",
     )

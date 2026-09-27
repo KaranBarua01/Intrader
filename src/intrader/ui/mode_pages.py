@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from PySide6.QtCore import QDate, QTime, QTimer, Qt
+from PySide6.QtCore import QDate, QTime, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QDateEdit, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
     QPushButton, QSlider, QSplitter, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
@@ -327,6 +327,75 @@ class IntraderModePage(QWidget):
         self.main_splitter.setStretchFactor(1, 36)
         root.addWidget(self.main_splitter, 1)
 
+    def _show_replay(self) -> None:
+        self._session_mode = False
+        self.tabs.setCurrentIndex(0)
+
+    def _show_range(self) -> None:
+        self._session_mode = False
+        self.session_guidance.hide()
+        self.tabs.setCurrentIndex(1)
+
+    def set_range_inputs(self, start: datetime, end: datetime) -> None:
+        start = start.astimezone(INDIA_TIME)
+        end = end.astimezone(INDIA_TIME)
+        self.range_from_day.setDate(
+            QDate(start.year, start.month, start.day)
+        )
+        self.range_from_time.setTime(QTime(start.hour, start.minute))
+        self.range_to_day.setDate(
+            QDate(end.year, end.month, end.day)
+        )
+        self.range_to_time.setTime(QTime(end.hour, end.minute))
+
+    def _set_session_guidance(self, decision, analysis) -> None:
+        self.session_guidance.show()
+        if decision is None:
+            self.session_action.setText("WAIT")
+            self.session_action.setObjectName("HeroValue")
+            for key in ("REGIME", "DIRECTION", "CONFIDENCE", "ENTRY", "RISK"):
+                self.session_guidance_metrics.set_metric(key, "N/A")
+            self.session_guidance_text.setText(
+                "No complete Market Brain decision was recorded in this session. "
+                "Candles and news are descriptive only, so Intrader will not invent "
+                "a CALL/PUT recommendation."
+            )
+        else:
+            tone = (
+                "positive" if decision.action == "BUY_CALL"
+                else "negative" if decision.action == "BUY_PUT"
+                else "neutral"
+            )
+            self.session_action.setText(decision.action.replace("_", " "))
+            self.session_action.setObjectName(
+                "Positive" if tone == "positive"
+                else "Negative" if tone == "negative"
+                else "HeroValue"
+            )
+            self.session_action.style().unpolish(self.session_action)
+            self.session_action.style().polish(self.session_action)
+            self.session_guidance_metrics.set_metric("REGIME", decision.regime)
+            self.session_guidance_metrics.set_metric(
+                "DIRECTION", str(decision.direction_score), _tone(decision.direction_score)
+            )
+            self.session_guidance_metrics.set_metric(
+                "CONFIDENCE", f"{decision.confidence}%"
+            )
+            self.session_guidance_metrics.set_metric(
+                "ENTRY", str(decision.entry_quality)
+            )
+            self.session_guidance_metrics.set_metric(
+                "RISK",
+                str(decision.reversal_risk),
+                "negative" if decision.reversal_risk > 70 else "neutral",
+            )
+            self.session_guidance_text.setText(
+                f"Latest verified Brain decision at "
+                f"{decision.decided_at.astimezone(INDIA_TIME):%H:%M}. "
+                f"Family coverage {decision.family_coverage}%. "
+                "This remains advisory/shadow guidance; real execution is manual."
+            )
+
     def resizeEvent(self, event) -> None:
         self.main_splitter.setOrientation(
             Qt.Orientation.Vertical
@@ -467,12 +536,15 @@ class IntraderModePage(QWidget):
 
 
 class TimeTravelPage(QWidget):
+    session_requested = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self._decisions = ()
         self._bundles = ()
         self._news = ()
         self._key_moments = ()
+        self._session_mode = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 34)
@@ -486,10 +558,13 @@ class TimeTravelPage(QWidget):
         hint.setObjectName("Muted")
         title_row.addWidget(hint)
         title_row.addStretch(1)
+        self.session_view_button = QPushButton("Session to Now")
+        self.session_view_button.setObjectName("PrimaryButton")
         self.replay_view_button = QPushButton("30m Replay")
         self.replay_view_button.setObjectName("SecondaryButton")
         self.range_view_button = QPushButton("Range Analysis")
         self.range_view_button.setObjectName("SecondaryButton")
+        title_row.addWidget(self.session_view_button)
         title_row.addWidget(self.replay_view_button)
         title_row.addWidget(self.range_view_button)
         title_row.addWidget(DotMatrix(columns=4, rows=3))
@@ -501,8 +576,9 @@ class TimeTravelPage(QWidget):
         self._build_replay_tab()
         self._build_range_tab()
         self.tabs.setCurrentIndex(1)
-        self.replay_view_button.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
-        self.range_view_button.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        self.session_view_button.clicked.connect(self.session_requested.emit)
+        self.replay_view_button.clicked.connect(self._show_replay)
+        self.range_view_button.clicked.connect(self._show_range)
 
         self.timer = QTimer(self)
         self.timer.setInterval(900)
@@ -697,6 +773,41 @@ class TimeTravelPage(QWidget):
         ])
         range_root.addWidget(self.range_metrics)
 
+        self.session_guidance = Card()
+        guidance_row = QHBoxLayout()
+        guidance_row.setContentsMargins(0, 0, 0, 0)
+        guidance_row.setSpacing(16)
+        action_box = QWidget()
+        action_layout = QVBoxLayout(action_box)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(2)
+        action_label = QLabel("CURRENT ADVISORY")
+        action_label.setObjectName("CardTitle")
+        self.session_action = QLabel("WAIT")
+        self.session_action.setObjectName("HeroValue")
+        action_layout.addWidget(action_label)
+        action_layout.addWidget(self.session_action)
+        guidance_row.addWidget(action_box)
+
+        self.session_guidance_metrics = MetricRibbon([
+            ("REGIME", "N/A"),
+            ("DIRECTION", "N/A"),
+            ("CONFIDENCE", "N/A"),
+            ("ENTRY", "N/A"),
+            ("RISK", "N/A"),
+        ])
+        guidance_row.addWidget(self.session_guidance_metrics, 1)
+
+        self.session_guidance_text = QLabel(
+            "Session-to-Now uses only recorded Market Brain evidence for CALL/PUT guidance."
+        )
+        self.session_guidance_text.setWordWrap(True)
+        self.session_guidance_text.setObjectName("Muted")
+        self.session_guidance.layout_box.addLayout(guidance_row)
+        self.session_guidance.layout_box.addWidget(self.session_guidance_text)
+        self.session_guidance.hide()
+        range_root.addWidget(self.session_guidance)
+
         self.range_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.range_chart = MarketChart("Price Chart — Selected Range")
         self.range_chart.setMinimumHeight(330)
@@ -720,6 +831,11 @@ class TimeTravelPage(QWidget):
             "No period analysis available yet.",
         )
         self.detail_tabs.addTab(self.range_notes, "Period Analysis")
+
+        self.range_news_context = DataTable(
+            ["Date / Time", "Type", "Source", "Context"]
+        )
+        self.detail_tabs.addTab(self.range_news_context, "News Context")
 
         self.range_coverage = DataTable(["Data family", "Coverage"])
         self.detail_tabs.addTab(self.range_coverage, "Data Coverage")
@@ -821,6 +937,10 @@ class TimeTravelPage(QWidget):
         self.range_from_time.setTime(QTime(start.hour, start.minute))
         self.range_to_day.setDate(QDate(end.year, end.month, end.day))
         self.range_to_time.setTime(QTime(end.hour, end.minute))
+        if days is not None and days >= 5:
+            self.range_chart.set_timeframe("Auto")
+        elif days == 0:
+            self.range_chart.set_timeframe("5m")
 
     def set_session_data(self, decisions, bundles, candles, news=()) -> None:
         self._decisions = tuple(decisions)
@@ -860,9 +980,21 @@ class TimeTravelPage(QWidget):
             for r in decision.reasons if r.thesis == "REJECTED"
         ])
 
-    def set_range_analysis(self, analysis, opening, candles) -> None:
+    def set_range_analysis(
+        self,
+        analysis,
+        opening,
+        candles,
+        news=(),
+        events=(),
+        *,
+        session_decision=None,
+        session_mode: bool = False,
+    ) -> None:
+        self._session_mode = session_mode
+        prefix = "Session-to-Now" if session_mode else "Analyzed"
         self.range_state.setText(
-            f"Analyzed {analysis.start.astimezone(INDIA_TIME):%d %b %H:%M} → "
+            f"{prefix} {analysis.start.astimezone(INDIA_TIME):%d %b %H:%M} → "
             f"{analysis.end.astimezone(INDIA_TIME):%d %b %H:%M} • "
             f"{analysis.candle_count:,} candles"
         )
@@ -899,6 +1031,10 @@ class TimeTravelPage(QWidget):
         )
 
         if candles:
+            if analysis.end - analysis.start >= timedelta(days=5):
+                self.range_chart.set_timeframe("Auto")
+            elif session_mode:
+                self.range_chart.set_timeframe("5m")
             self.range_chart.set_candle_objects(candles)
         else:
             self.range_chart.set_empty_message(
@@ -906,6 +1042,10 @@ class TimeTravelPage(QWidget):
             )
 
         self.opening_panel.set_snapshot(opening)
+        if session_mode:
+            self._set_session_guidance(session_decision, analysis)
+        else:
+            self.session_guidance.hide()
         context_summary = " ".join(str(item) for item in analysis.analysis_notes[:2])
         self.opening_panel.set_analysis_context(
             context_summary
@@ -943,6 +1083,27 @@ class TimeTravelPage(QWidget):
             [[name, count] for name, count in analysis.regime_counts]
             or [["No recorded regime snapshots in selected range.", 0]]
         )
+        context_rows = []
+        for item in news:
+            context_rows.append([
+                item.published_at.astimezone(INDIA_TIME).strftime("%Y-%m-%d %H:%M"),
+                "NEWS",
+                item.source,
+                item.title,
+            ])
+        for event in events:
+            context_rows.append([
+                event.scheduled_at.astimezone(INDIA_TIME).strftime("%Y-%m-%d %H:%M"),
+                f"EVENT • {event.impact}",
+                event.source,
+                event.name,
+            ])
+        context_rows.sort(key=lambda row: row[0], reverse=True)
+        self.range_news_context.set_rows(
+            context_rows
+            or [["—", "—", "—", "No cached news or scheduled events in this range."]]
+        )
+
         self.range_coverage.set_rows([
             [name, status] for name, status in analysis.coverage
         ])

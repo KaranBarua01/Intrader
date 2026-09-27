@@ -1,4 +1,6 @@
 import os
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -97,3 +99,66 @@ def test_shadow_trader_replay_controls_are_present(monkeypatch) -> None:
     assert page.selected_replay_mode() == "MEDIUM"
     assert page.replay_start_button.text().startswith("▶")
     assert "Export Results" in page.replay_export_button.text()
+
+
+def test_shadow_trader_results_tab_populates_and_opens(monkeypatch) -> None:
+    app, window = _window(monkeypatch)
+    page = window.shadow_page
+
+    metrics = SimpleNamespace(
+        sessions=10,
+        evaluable_signals=3,
+        wins=2,
+        losses=1,
+        win_rate_pct=Decimal("66.6667"),
+        average_return_30m_pct=Decimal("0.12"),
+        average_winner_pct=Decimal("0.20"),
+        average_loser_pct=Decimal("-0.04"),
+        profit_factor=Decimal("2.5"),
+        max_drawdown_pct_points=Decimal("0.04"),
+        max_losing_streak=1,
+    )
+    candidate = SimpleNamespace(
+        strategy_name="Synthetic Strategy",
+        signals=8,
+        hit_rate_30m_pct=Decimal("62.5"),
+        average_return_30m_pct=Decimal("0.08"),
+        sample_label="EARLY",
+    )
+    trade = SimpleNamespace(
+        phase="BLIND",
+        at="2026-08-01T10:00:00+05:30",
+        direction="CALL / LONG",
+        entry_underlying=Decimal("24000"),
+        approx_exit_underlying_30m=Decimal("24024"),
+        return_5m_pct=Decimal("0.02"),
+        return_15m_pct=Decimal("0.06"),
+        return_30m_pct=Decimal("0.10"),
+        mfe_30m_pct=Decimal("0.14"),
+        mae_30m_pct=Decimal("-0.03"),
+        result="WIN",
+    )
+    report = SimpleNamespace(
+        selected_strategy_name="Synthetic Strategy",
+        development_sessions=20,
+        blind_sessions=10,
+        actual_sessions=30,
+        requested_touchpoints=30,
+        mode="MEDIUM",
+        first_session="2026-07-01",
+        last_session="2026-08-15",
+        development=metrics,
+        blind=metrics,
+        candidates=(candidate,),
+        trades=(trade,),
+    )
+
+    page.set_replay_report(report)
+    app.processEvents()
+
+    assert page.tabs.tabText(page.results_tab_index) == "Results"
+    assert page.tabs.currentIndex() == page.results_tab_index
+    assert page.results_export_button.isEnabled()
+    assert page.results_trades.rowCount() == 1
+    assert page.results_comparison.rowCount() == 2
+    assert page.results_candidates.rowCount() == 1

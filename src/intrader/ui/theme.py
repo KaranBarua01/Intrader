@@ -185,6 +185,62 @@ QPushButton#AccentDot[selected="true"] {{
     border: 2px solid #171717;
 }}
 
+
+QDialog, QMessageBox {{
+    background: #FBFAF7;
+    color: #17191c;
+}}
+QMessageBox QLabel {{
+    background: transparent;
+    color: #17191c;
+}}
+QMessageBox QPushButton {{
+    background: #FBFAF7;
+    color: #17191c;
+    border: 1px solid #D8D4CC;
+    border-radius: 8px;
+    padding: 7px 14px;
+    min-width: 72px;
+}}
+QMessageBox QPushButton:hover {{
+    background: #F0EEE9;
+    border-color: #C9C4BA;
+}}
+QMenu {{
+    background: #FEFDFB;
+    color: #202327;
+    border: 1px solid #D8D4CC;
+    border-radius: 8px;
+    padding: 5px;
+}}
+QMenu::item {{
+    background: transparent;
+    color: #202327;
+    border-radius: 6px;
+    padding: 7px 18px 7px 10px;
+}}
+QMenu::item:selected {{
+    background: #EEECE7;
+    color: #111318;
+}}
+QMenu::item:disabled {{
+    color: #A2A5A8;
+}}
+QToolTip {{
+    background: #FEFDFB;
+    color: #17191c;
+    border: 1px solid #D8D4CC;
+    padding: 5px 7px;
+}}
+QComboBox QAbstractItemView {{
+    background: #FEFDFB;
+    color: #202327;
+    border: 1px solid #D8D4CC;
+    selection-background-color: #EEECE7;
+    selection-color: #111318;
+    outline: 0;
+}}
+
 QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QDoubleSpinBox {{
     background: #FBFAF7;
     border: 1px solid #DFDCD5;

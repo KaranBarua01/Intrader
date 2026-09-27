@@ -49,7 +49,7 @@ def test_time_travel_exposes_replay_range_and_reanalysis_controls() -> None:
     assert page.tabs.tabText(0) == "30-Minute Replay"
     assert "Range Analysis" in page.tabs.tabText(1)
     assert page.reanalyze_button.text() == "Re-analyze with Current Brain"
-    assert page.range_load_button.text() == "Analyze Period"
+    assert page.range_load_button.text() == "▶  Analyze Period"
     assert page.range_enrich_button.text() == "Fetch Missing"
     assert page.replay_enrich_button.text() == "Fetch Missing"
 
@@ -112,7 +112,7 @@ def test_strategy_lab_is_separate_research_mode() -> None:
     app = QApplication.instance() or QApplication([])
     page = StrategyLabPage()
 
-    assert page.analyze_button.text() == "Analyze Strategies"
+    assert page.analyze_button.text() == "▶  Analyze Strategies"
     assert page.source_filter.findText("Steve Nison") >= 0
     assert page.source_filter.findText("Ashwani Gujral") >= 0
     assert page.source_filter.findText("John Carter") >= 0

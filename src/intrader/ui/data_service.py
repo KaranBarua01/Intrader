@@ -356,6 +356,31 @@ class DesktopDataService:
             mode_key=mode_key,
         )
 
+    def run_shadow_replay_with_visuals(
+        self,
+        sessions: int,
+        mode_key: str,
+    ) -> tuple[ShadowReplayReport, tuple[Candle, ...]]:
+        """Run the replay and return only the selected candles for UI playback."""
+
+        candles = self.load_shadow_replay_candles(sessions)
+        report = run_candle_proxy_replay(
+            candles,
+            sessions=sessions,
+            mode_key=mode_key,
+        )
+        selected_dates = sorted({
+            candle.at.astimezone(INDIA_TIME).date()
+            for candle in candles
+        })[-sessions:]
+        selected_set = set(selected_dates)
+        selected = tuple(
+            candle
+            for candle in sorted(candles, key=lambda item: item.at)
+            if candle.at.astimezone(INDIA_TIME).date() in selected_set
+        )
+        return report, selected
+
     def analyze_time_range(
         self,
         start: datetime,

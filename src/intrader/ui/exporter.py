@@ -10,7 +10,12 @@ import csv
 import json
 
 from intrader.records_manager_pipeline import build_records_manager
-from intrader.shadow_lab import development_blind_split, replay_mode
+from intrader.shadow_lab import (
+    ShadowReplayConfig,
+    development_blind_split,
+    replay_mode,
+    validate_replay_config,
+)
 from intrader.storage import SQLiteStore
 
 
@@ -76,14 +81,27 @@ def export_shadow_review_bundle(
     store: SQLiteStore,
     target: Path,
     *,
-    sessions: int,
-    mode_key: str,
+    config: ShadowReplayConfig | None = None,
+    sessions: int | None = None,
+    mode_key: str | None = None,
     replay_report=None,
 ) -> Path:
-    """Export one self-contained Shadow Trader review bundle for diagnosis."""
+    """Export one self-contained Shadow Arena review bundle for diagnosis."""
 
-    mode = replay_mode(mode_key)
-    development, blind = development_blind_split(sessions)
+    if config is None and replay_report is not None and hasattr(replay_report, "config"):
+        config = replay_report.config
+    if config is None:
+        if sessions is None or mode_key is None:
+            raise ExportError("Shadow replay configuration unavailable")
+        development, blind = development_blind_split(sessions)
+        config = ShadowReplayConfig(
+            development_sessions=development,
+            blind_sessions=blind,
+            mode_key=mode_key,
+        )
+    config = validate_replay_config(config)
+    mode = replay_mode(config.mode_key)
+
     decisions = store.load_decision_records()
     bundles = store.load_completed_shadow_bundles()
     audits = store.load_reason_audits()
@@ -94,13 +112,11 @@ def export_shadow_review_bundle(
         performance_payload = None
 
     payload = {
-        "schema": "intrader-shadow-review-v1",
+        "schema": "intrader-shadow-review-v2-arena",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "replay_configuration": {
-            "requested_sessions": sessions,
-            "development_sessions": development,
-            "blind_sessions": blind,
-            "mode": mode.key,
+            **asdict(config),
+            "total_sessions": config.total_sessions,
             "mode_label": mode.label,
             "requested_touchpoints": mode.feature_count,
             "feature_families": mode.families,
@@ -108,13 +124,17 @@ def export_shadow_review_bundle(
             "causality_rule": (
                 "decision engine may only read observations with timestamp <= simulated clock"
             ),
+            "paper_money_note": (
+                "Paper P&L is a directional NIFTY proxy until historical option-premium "
+                "data is connected."
+            ),
         },
         "historical_replay_report": (
             None if replay_report is None else asdict(replay_report)
         ),
         "performance": performance_payload,
         "decision_records": [asdict(decision) for decision in decisions],
-        "completed_shadow_trades": [
+        "completed_forward_shadow_trades": [
             {
                 "decision": asdict(decision),
                 "trade": asdict(trade),
@@ -124,9 +144,10 @@ def export_shadow_review_bundle(
         ],
         "reason_audits": [asdict(audit) for audit in audits],
         "review_notes": [
+            "Compare each timeframe trader independently before combining them.",
+            "Do not tune the frozen blind block after seeing its results.",
             "Missing historical families must remain missing; never infer expired option data.",
-            "Compare development and blind results separately before changing rules.",
-            "Upload this JSON back into ChatGPT for feature, regime, drawdown and expectancy review.",
+            "Upload this JSON back into ChatGPT for timeframe, drawdown, expectancy and rejected-signal review.",
         ],
     }
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +156,6 @@ def export_shadow_review_bundle(
         encoding="utf-8",
     )
     return target
-
 
 def export_reasoning(store: SQLiteStore, target: Path) -> Path:
     decisions = store.load_decision_records()

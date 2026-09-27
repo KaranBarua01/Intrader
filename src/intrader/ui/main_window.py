@@ -705,17 +705,18 @@ class MainWindow(QMainWindow):
             self._show_error(message)
         self._run_task(self.updater.apply, done, failed)
 
-    def run_shadow_replay(self, sessions: int, mode_key: str) -> None:
-        """Run the causal replay, then animate a display-only historical playback."""
+    def run_shadow_replay(self, config) -> None:
+        """Run the configurable parallel Shadow Arena, then animate it."""
 
+        total = config.total_sessions
         self.shadow_page.set_replay_progress(
             0,
-            sessions,
-            "RUNNING — downloading/caching historical NIFTY candles and calculating the replay…",
+            total,
+            "RUNNING — downloading/caching historical NIFTY candles and building the timeframe tournament…",
         )
 
         def task():
-            return self.service.run_shadow_replay_with_visuals(sessions, mode_key)
+            return self.service.run_shadow_replay_with_visuals(config)
 
         def done(payload) -> None:
             report, candles = payload
@@ -723,7 +724,7 @@ class MainWindow(QMainWindow):
             self.shadow_page.set_replay_report(report, open_results=False)
             self.shadow_page.begin_visual_playback(candles, report)
             self.statusBar().showMessage(
-                "Replay calculation complete. Simulated Live Replay is now visualizing the historical run.",
+                "Shadow Arena calculation complete. Historical playback is now running.",
                 6000,
             )
 
@@ -737,40 +738,34 @@ class MainWindow(QMainWindow):
         report = self._latest_shadow_replay_report
         if report is None:
             return
-        blind = report.blind
-        win_rate = (
-            "N/A"
-            if blind.win_rate_pct is None
-            else f"{blind.win_rate_pct:.2f}%"
+        blind_trades = sum(
+            trader.blind_metrics.trades
+            for trader in report.trader_reports
         )
-        expectancy = (
-            "N/A"
-            if blind.average_return_30m_pct is None
-            else f"{blind.average_return_30m_pct:.4f}%"
-        )
-        strategy = report.selected_strategy_name or "No qualifying strategy"
         self.shadow_page.set_replay_progress(
             report.actual_sessions,
-            report.requested_sessions,
+            report.total_sessions,
             (
-                f"COMPLETE — frozen strategy: {strategy} • blind signals: "
-                f"{blind.evaluable_signals} • win rate: {win_rate} • "
-                f"avg signed 30m return: {expectancy}."
+                f"COMPLETE — {len(report.trader_reports)} timeframe traders • "
+                f"{blind_trades} blind paper trades • "
+                f"{report.config.development_sessions} development + "
+                f"{report.config.blind_sessions} blind sessions."
             ),
         )
         self.shadow_page.set_replay_finished(
             (
-                f"COMPLETE — {report.actual_sessions} sessions processed in {report.mode} mode. "
-                "Results are ready for review/export."
+                f"COMPLETE — Shadow Arena processed {report.actual_sessions} sessions "
+                f"in {report.config.mode_key} mode. Results are ready for review/export."
             )
         )
         self.shadow_page.show_replay_results()
 
-    def export_shadow_review(self, sessions: int, mode_key: str) -> None:
+    def export_shadow_review(self, config) -> None:
+        total = config.total_sessions
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Shadow Trader Review",
-            f"intrader_shadow_review_{sessions}d_{mode_key.lower()}.json",
+            f"intrader_shadow_arena_{total}d_{config.mode_key.lower()}.json",
             "JSON Files (*.json)",
         )
         if not path:
@@ -780,11 +775,11 @@ class MainWindow(QMainWindow):
             lambda store: export_shadow_review_bundle(
                 store,
                 Path(path),
-                sessions=sessions,
-                mode_key=mode_key,
+                config=config,
                 replay_report=replay_report,
             )
         )
+
 
     def export_shadow(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export Shadow Results", "intrader_shadow_results.csv", "CSV Files (*.csv)")

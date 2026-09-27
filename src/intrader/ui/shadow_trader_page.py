@@ -1,22 +1,25 @@
 """Dedicated Shadow Trader research workspace for Intrader.
 
-This page is additive: it reuses the existing immutable shadow-trade records and
-does not alter broker connectivity, order handling, Time Travel, Strategy Lab,
-or the existing Market Brain.
+The workspace is research-only. Historical replay, paper capital and visual
+playback never send broker orders or mutate Intrader's live execution rules.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
-from PySide6.QtCore import QPointF, QTimer, Signal
-from PySide6.QtGui import QPainter, QPainterPath, QPen
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -25,108 +28,52 @@ from PySide6.QtWidgets import (
 from intrader.shadow_lab import (
     DATA_COVERAGE,
     DEFAULT_SHADOW_LAB_PLAN,
+    DEFAULT_TRADER_TIMEFRAMES,
     FEATURE_FAMILIES,
+    MAX_REPLAY_SESSION_INPUT,
     NEWS_RESOURCES,
     REPLAY_MODES,
-    REPLAY_SESSION_OPTIONS,
-    development_blind_split,
+    ShadowReplayConfig,
     replay_mode,
+    validate_replay_config,
 )
-from intrader.ui.components import (
-    Card,
-    DataTable,
-    MarketChart,
-    MetricCard,
-    ResponsiveMetricGrid,
-)
+from intrader.ui.components import Card, DataTable, MarketChart, MetricCard, ResponsiveMetricGrid
 
 
-class ReplayEquityCurve(QWidget):
-    """Small dependency-free cumulative-return chart for replay results."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._values: list[float] = [0.0]
-        self.setMinimumHeight(180)
-
-    def set_returns(self, returns) -> None:
-        cumulative = 0.0
-        values = [0.0]
-        for value in returns:
-            if value is None:
-                continue
-            cumulative += float(value)
-            values.append(cumulative)
-        self._values = values
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(12, 12, -12, -18)
-        if rect.width() <= 2 or rect.height() <= 2:
-            return
-
-        values = self._values or [0.0]
-        low = min(values)
-        high = max(values)
-        if high == low:
-            high += 1.0
-            low -= 1.0
-
-        def point(index: int, value: float) -> QPointF:
-            x = rect.left() if len(values) == 1 else (
-                rect.left() + rect.width() * index / (len(values) - 1)
-            )
-            y = rect.bottom() - rect.height() * ((value - low) / (high - low))
-            return QPointF(float(x), float(y))
-
-        axis_pen = QPen(self.palette().mid().color())
-        axis_pen.setWidth(1)
-        painter.setPen(axis_pen)
-        zero_y = point(0, 0.0).y()
-        painter.drawLine(
-            QPointF(float(rect.left()), zero_y),
-            QPointF(float(rect.right()), zero_y),
-        )
-
-        path = QPainterPath()
-        first = point(0, values[0])
-        path.moveTo(first)
-        for index, value in enumerate(values[1:], start=1):
-            path.lineTo(point(index, value))
-
-        curve_pen = QPen(self.palette().highlight().color())
-        curve_pen.setWidth(2)
-        painter.setPen(curve_pen)
-        painter.drawPath(path)
+TRADER_TITLES = {
+    1: "1M SCALPER",
+    5: "5M FAST",
+    10: "10M MOMENTUM",
+    15: "15M TREND",
+}
 
 
 class ShadowTraderPage(QWidget):
-    """Research, historical replay, and forward-validation workspace."""
+    """Historical validation, Shadow Arena and forward shadow workspace."""
 
-    replay_requested = Signal(int, str)
-    replay_export_requested = Signal(int, str)
+    replay_requested = Signal(object)
+    replay_export_requested = Signal(object)
     playback_finished = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.plan = DEFAULT_SHADOW_LAB_PLAN
         self._replay_running = False
+        self._latest_config = ShadowReplayConfig()
+
         self._playback_timer = QTimer(self)
         self._playback_timer.setInterval(50)
         self._playback_timer.timeout.connect(self._playback_tick)
         self._playback_candles = ()
         self._playback_report = None
         self._playback_index = 0
-        self._playback_trade_index = 0
-        self._playback_trades = ()
-        self._playback_open: list[tuple[object, datetime]] = []
+        self._playback_events = ()
+        self._playback_event_index = 0
+        self._playback_open: dict[int, list[tuple[object, datetime]]] = {}
         self._playback_tape_rows: list[list[object]] = []
-        self._playback_realized = 0.0
         self._playback_session_dates = ()
-        self._playback_last_chart_at = None
+        self._playback_phase = None
+        self._arena_runtime: dict[int, dict[str, object]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 34)
@@ -137,7 +84,7 @@ class ShadowTraderPage(QWidget):
         title = QLabel("Shadow Trader")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            "Historical replay + locked blind validation + live shadow trading. "
+            "Configurable historical validation + four parallel paper traders + future shadow trading. "
             "No broker orders are sent from this workspace."
         )
         subtitle.setWordWrap(True)
@@ -145,7 +92,6 @@ class ShadowTraderPage(QWidget):
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
         header.addLayout(title_box, 1)
-
         source = QLabel("PRIMARY NOW: ANGEL ONE")
         source.setObjectName("StatusPill")
         header.addWidget(source)
@@ -153,11 +99,10 @@ class ShadowTraderPage(QWidget):
 
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
-
         self.tabs.addTab(self._build_overview(), "Overview")
-        self.tabs.addTab(self._build_historical(), "Replay")
+        self.tabs.addTab(self._build_historical(), "Replay Setup")
         self.live_page = self._build_live_replay()
-        self.live_tab_index = self.tabs.addTab(self.live_page, "Live Replay")
+        self.live_tab_index = self.tabs.addTab(self.live_page, "Shadow Arena")
         self.results_page = self._build_results()
         self.results_tab_index = self.tabs.addTab(self.results_page, "Results")
         self.tabs.addTab(self._build_forward(), "60-Day Forward")
@@ -171,44 +116,39 @@ class ShadowTraderPage(QWidget):
         root.setContentsMargins(4, 8, 4, 4)
         root.setSpacing(8)
 
-        self.hist_metric = MetricCard("MAX HISTORICAL SESSIONS")
-        self.hist_metric.set_value(str(self.plan.historical_sessions))
-        self.split_metric = MetricCard("DEFAULT VALIDATION SPLIT")
-        self.split_metric.set_value("60 + 30")
-        self.forward_metric = MetricCard("FORWARD SESSIONS")
-        self.forward_metric.set_value(str(self.plan.forward_sessions))
-        self.feature_metric = MetricCard("HIGH MODE FEATURES")
-        self.feature_metric.set_value(str(self.plan.feature_count))
+        self.hist_metric = MetricCard("DEVELOPMENT")
+        self.hist_metric.set_value("1–500 days")
+        self.split_metric = MetricCard("BLIND")
+        self.split_metric.set_value("1–500 days")
+        self.forward_metric = MetricCard("FORWARD")
+        self.forward_metric.set_value(f"{self.plan.forward_sessions} days")
+        self.feature_metric = MetricCard("PARALLEL TRADERS")
+        self.feature_metric.set_value("1M • 5M • 10M • 15M")
         root.addWidget(
             ResponsiveMetricGrid(
-                [
-                    self.hist_metric,
-                    self.split_metric,
-                    self.forward_metric,
-                    self.feature_metric,
-                ],
+                [self.hist_metric, self.split_metric, self.forward_metric, self.feature_metric],
                 compact_height=78,
             )
         )
 
         protocol = Card("VALIDATION PROTOCOL")
         protocol_text = QLabel(
-            "Choose 30, 60 or 90 historical trading sessions. The first two-thirds are "
-            "development and the final one-third is locked blind validation. Within every "
-            "session, the replay brain may only read observations with timestamp <= the "
-            "simulated clock. The next 60 real trading sessions remain forward shadow testing."
+            "You choose development and blind periods independently. Development may be inspected "
+            "and used to select a strategy. Blind is locked: no strategy, threshold or feature "
+            "changes after it begins. At simulated time T, the decision side may read only "
+            "observations timestamped at or before T."
         )
         protocol_text.setWordWrap(True)
         protocol.add_widget(protocol_text)
         root.addWidget(protocol)
 
-        current = Card("CURRENT SHADOW STATE")
-        self.active_text = QLabel("No active shadow trade.")
+        current = Card("CURRENT FORWARD SHADOW STATE")
+        self.active_text = QLabel("No active forward shadow trade.")
         self.active_text.setWordWrap(True)
         current.add_widget(self.active_text)
         root.addWidget(current)
 
-        history = Card("RECENT COMPLETED SHADOW TRADES")
+        history = Card("RECENT COMPLETED FORWARD SHADOW TRADES")
         self.history = DataTable(
             ["Opened", "Action", "Contract", "Entry", "Exit", "Result", "Adjusted P&L"]
         )
@@ -222,36 +162,77 @@ class ShadowTraderPage(QWidget):
         root.setContentsMargins(4, 8, 4, 4)
         root.setSpacing(8)
 
-        controls = Card("REPLAY CONTROL")
-        selectors = QHBoxLayout()
+        controls = Card("REPLAY CONFIGURATION")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
 
-        range_label = QLabel("Range")
-        selectors.addWidget(range_label)
-        self.replay_range = QComboBox()
-        for sessions in REPLAY_SESSION_OPTIONS:
-            self.replay_range.addItem(f"{sessions} trading days", sessions)
-        self.replay_range.setCurrentIndex(self.replay_range.findData(90))
-        selectors.addWidget(self.replay_range)
+        grid.addWidget(QLabel("Development"), 0, 0)
+        self.development_days = QSpinBox()
+        self.development_days.setRange(1, MAX_REPLAY_SESSION_INPUT)
+        self.development_days.setValue(60)
+        self.development_days.setSuffix(" trading days")
+        grid.addWidget(self.development_days, 0, 1)
 
-        mode_label = QLabel("Mode")
-        selectors.addWidget(mode_label)
+        grid.addWidget(QLabel("Blind"), 0, 2)
+        self.blind_days = QSpinBox()
+        self.blind_days.setRange(1, MAX_REPLAY_SESSION_INPUT)
+        self.blind_days.setValue(30)
+        self.blind_days.setSuffix(" trading days")
+        grid.addWidget(self.blind_days, 0, 3)
+
+        grid.addWidget(QLabel("Data depth"), 0, 4)
         self.replay_mode = QComboBox()
         for mode in REPLAY_MODES:
             self.replay_mode.addItem(
-                f"{mode.label} — {mode.feature_count} touchpoints",
-                mode.key,
+                f"{mode.label} — {mode.feature_count} touchpoints", mode.key
             )
         self.replay_mode.setCurrentIndex(self.replay_mode.findData("MEDIUM"))
-        selectors.addWidget(self.replay_mode)
-        selectors.addStretch(1)
-        controls.layout_box.addLayout(selectors)
+        grid.addWidget(self.replay_mode, 0, 5)
+
+        grid.addWidget(QLabel("Fake starting money"), 1, 0)
+        self.starting_capital = QDoubleSpinBox()
+        self.starting_capital.setRange(100, 100000000)
+        self.starting_capital.setDecimals(0)
+        self.starting_capital.setSingleStep(5000)
+        self.starting_capital.setValue(50000)
+        self.starting_capital.setPrefix("₹")
+        grid.addWidget(self.starting_capital, 1, 1)
+
+        grid.addWidget(QLabel("Position size"), 1, 2)
+        self.allocation_pct = QDoubleSpinBox()
+        self.allocation_pct.setRange(1, 100)
+        self.allocation_pct.setDecimals(1)
+        self.allocation_pct.setValue(25)
+        self.allocation_pct.setSuffix("% of equity")
+        grid.addWidget(self.allocation_pct, 1, 3)
+
+        grid.addWidget(QLabel("Estimated friction"), 1, 4)
+        self.friction_bps = QDoubleSpinBox()
+        self.friction_bps.setRange(0, 1000)
+        self.friction_bps.setDecimals(1)
+        self.friction_bps.setValue(5)
+        self.friction_bps.setSuffix(" bps / trade")
+        grid.addWidget(self.friction_bps, 1, 5)
+
+        grid.addWidget(QLabel("Parallel traders"), 2, 0)
+        trader_row = QHBoxLayout()
+        self.trader_checks: dict[int, QCheckBox] = {}
+        for timeframe in DEFAULT_TRADER_TIMEFRAMES:
+            check = QCheckBox(TRADER_TITLES[timeframe])
+            check.setChecked(True)
+            self.trader_checks[timeframe] = check
+            trader_row.addWidget(check)
+        trader_row.addStretch(1)
+        grid.addLayout(trader_row, 2, 1, 1, 5)
+        controls.layout_box.addLayout(grid)
 
         self.mode_description = QLabel()
         self.mode_description.setWordWrap(True)
         controls.add_widget(self.mode_description)
 
         buttons = QHBoxLayout()
-        self.replay_start_button = QPushButton("▶  Start Replay")
+        self.replay_start_button = QPushButton("▶  Start Shadow Arena")
         self.replay_start_button.setObjectName("PrimaryButton")
         self.replay_export_button = QPushButton("↓  Export Results")
         self.replay_export_button.setObjectName("SecondaryButton")
@@ -260,14 +241,12 @@ class ShadowTraderPage(QWidget):
         buttons.addWidget(self.replay_export_button)
         controls.layout_box.addLayout(buttons)
 
-        self.replay_status = QLabel(
-            "READY — choose a range and depth, then start the historical shadow replay."
-        )
+        self.replay_status = QLabel("READY — configure the experiment, then start.")
         self.replay_status.setWordWrap(True)
         controls.add_widget(self.replay_status)
         root.addWidget(controls)
 
-        self.split_card = Card("VALIDATION SPLIT")
+        self.split_card = Card("EXPERIMENT DESIGN")
         self.split_text = QLabel()
         self.split_text.setWordWrap(True)
         self.split_card.add_widget(self.split_text)
@@ -279,51 +258,49 @@ class ShadowTraderPage(QWidget):
         self.historical_progress.setFormat("%v / %m trading sessions")
         root.addWidget(self.historical_progress)
 
-        self.replay_strategy_metric = MetricCard("FROZEN STRATEGY")
-        self.replay_strategy_metric.set_value("—")
-        self.replay_win_metric = MetricCard("BLIND WIN RATE")
-        self.replay_win_metric.set_value("—")
-        self.replay_expectancy_metric = MetricCard("BLIND AVG 30M RETURN")
-        self.replay_expectancy_metric.set_value("—")
-        self.replay_signal_metric = MetricCard("BLIND SIGNALS")
-        self.replay_signal_metric.set_value("—")
+        self.setup_total_metric = MetricCard("TOTAL SESSIONS")
+        self.setup_dev_metric = MetricCard("DEVELOPMENT")
+        self.setup_blind_metric = MetricCard("BLIND")
+        self.setup_money_metric = MetricCard("FAKE MONEY / TRADER")
         root.addWidget(
             ResponsiveMetricGrid(
                 [
-                    self.replay_strategy_metric,
-                    self.replay_win_metric,
-                    self.replay_expectancy_metric,
-                    self.replay_signal_metric,
+                    self.setup_total_metric,
+                    self.setup_dev_metric,
+                    self.setup_blind_metric,
+                    self.setup_money_metric,
                 ],
                 compact_height=78,
             )
         )
 
-        integrity = Card("REPLAY INTEGRITY")
-        integrity_text = QLabel(
-            "No look-ahead: future candles, future news, end-of-day highs/lows, future "
-            "normalization values and blind-period observations are unavailable to the "
-            "decision engine until the simulated clock reaches them."
+        integrity = Card("INTEGRITY RULES")
+        label = QLabel(
+            "No look-ahead. Blind rules are frozen. Four timeframe traders are independent. "
+            "Each gets the same fake starting capital. Only one 30-minute proxy position may "
+            "be open per timeframe; overlapping signals are recorded as rejected. Historical "
+            "option premiums are never invented."
         )
-        integrity_text.setWordWrap(True)
-        integrity.add_widget(integrity_text)
+        label.setWordWrap(True)
+        integrity.add_widget(label)
         root.addWidget(integrity)
-
-        metrics = Card("RESULTS CAPTURED FOR REVIEW")
-        outputs = QLabel(
-            "Taken signals • rejected signals • entry/exit • stop/target • friction-adjusted "
-            "P&L when executable price data exists • MFE/MAE • win rate • expectancy • "
-            "profit factor • drawdown • streaks • regime/time performance • feature coverage "
-            "• strategy/version metadata. Export Results creates a review bundle you can upload "
-            "back into ChatGPT for diagnosis."
-        )
-        outputs.setWordWrap(True)
-        metrics.add_widget(outputs)
-        root.addWidget(metrics)
         root.addStretch(1)
 
-        self.replay_range.currentIndexChanged.connect(self._sync_replay_controls)
+        for widget in (
+            self.development_days,
+            self.blind_days,
+            self.replay_mode,
+            self.starting_capital,
+            self.allocation_pct,
+            self.friction_bps,
+        ):
+            if hasattr(widget, "valueChanged"):
+                widget.valueChanged.connect(self._sync_replay_controls)
+            elif hasattr(widget, "currentIndexChanged"):
+                widget.currentIndexChanged.connect(self._sync_replay_controls)
         self.replay_mode.currentIndexChanged.connect(self._sync_replay_controls)
+        for check in self.trader_checks.values():
+            check.toggled.connect(self._sync_replay_controls)
         self.replay_start_button.clicked.connect(self._request_replay)
         self.replay_export_button.clicked.connect(self._request_export)
         self._sync_replay_controls()
@@ -335,22 +312,17 @@ class ShadowTraderPage(QWidget):
         root.setContentsMargins(4, 8, 4, 4)
         root.setSpacing(8)
 
-        controls = Card("SIMULATED LIVE REPLAY")
+        controls = Card("SHADOW ARENA — SIMULATED LIVE REPLAY")
         row = QHBoxLayout()
         self.live_status = QLabel(
-            "Waiting for a historical replay. This view is display-only and never sends broker orders."
+            "Waiting for a replay. Shadow Arena is display-only and never sends broker orders."
         )
         self.live_status.setWordWrap(True)
         row.addWidget(self.live_status, 1)
 
         row.addWidget(QLabel("Speed"))
         self.live_speed = QComboBox()
-        for label, speed in (
-            ("100x", 100),
-            ("500x", 500),
-            ("1000x", 1000),
-            ("MAX", 5000),
-        ):
+        for label, speed in (("100x", 100), ("500x", 500), ("1000x", 1000), ("MAX", 5000)):
             self.live_speed.addItem(label, speed)
         self.live_speed.setCurrentIndex(self.live_speed.findData(500))
         row.addWidget(self.live_speed)
@@ -359,6 +331,11 @@ class ShadowTraderPage(QWidget):
         self.live_pause_button.setEnabled(False)
         self.live_pause_button.clicked.connect(self._toggle_playback_pause)
         row.addWidget(self.live_pause_button)
+
+        self.live_chart_button = QPushButton("Open Chart")
+        self.live_chart_button.setEnabled(False)
+        self.live_chart_button.clicked.connect(self._toggle_live_chart)
+        row.addWidget(self.live_chart_button)
 
         self.live_skip_button = QPushButton("Skip to Results")
         self.live_skip_button.setEnabled(False)
@@ -370,50 +347,72 @@ class ShadowTraderPage(QWidget):
         self.live_clock_metric = MetricCard("SIMULATED CLOCK")
         self.live_phase_metric = MetricCard("PHASE")
         self.live_price_metric = MetricCard("NIFTY")
-        self.live_action_metric = MetricCard("SHADOW STATE")
-        self.live_proxy_metric = MetricCard("REALIZED PROXY RETURN")
         self.live_session_metric = MetricCard("SESSION")
-        for metric in (
-            self.live_clock_metric,
-            self.live_phase_metric,
-            self.live_price_metric,
-            self.live_action_metric,
-            self.live_proxy_metric,
-            self.live_session_metric,
-        ):
-            metric.set_value("—")
         root.addWidget(
             ResponsiveMetricGrid(
                 [
                     self.live_clock_metric,
                     self.live_phase_metric,
                     self.live_price_metric,
-                    self.live_action_metric,
-                    self.live_proxy_metric,
                     self.live_session_metric,
                 ],
                 compact_height=78,
             )
         )
+        for metric in (
+            self.live_clock_metric,
+            self.live_phase_metric,
+            self.live_price_metric,
+            self.live_session_metric,
+        ):
+            metric.set_value("—")
 
-        self.live_chart = MarketChart("SIMULATED NIFTY — HISTORICAL PLAYBACK")
-        self.live_chart.set_timeframe("1m")
-        root.addWidget(self.live_chart, 1)
+        arena = Card("FOUR-TRADER PAPER TOURNAMENT")
+        trader_grid = QGridLayout()
+        self.trader_cards: dict[int, dict[str, object]] = {}
+        for index, timeframe in enumerate(DEFAULT_TRADER_TIMEFRAMES):
+            card = Card(TRADER_TITLES[timeframe])
+            state = QLabel("WAITING")
+            state.setObjectName("HeroValue")
+            balance = QLabel("Balance —")
+            pnl = QLabel("P&L —")
+            wl = QLabel("W 0 / L 0")
+            dd = QLabel("Drawdown —")
+            for label in (balance, pnl, wl, dd):
+                label.setObjectName("Muted")
+            card.add_widget(state)
+            card.add_widget(balance)
+            card.add_widget(pnl)
+            card.add_widget(wl)
+            card.add_widget(dd)
+            trader_grid.addWidget(card, index // 2, index % 2)
+            self.trader_cards[timeframe] = {
+                "card": card,
+                "state": state,
+                "balance": balance,
+                "pnl": pnl,
+                "wl": wl,
+                "dd": dd,
+            }
+        arena.layout_box.addLayout(trader_grid)
+        root.addWidget(arena)
 
-        tape = Card("SHADOW TRADE TAPE")
+        tape = Card("EVENT STREAM")
         self.live_tape = DataTable(
-            [
-                "Time", "Phase", "Event", "Direction", "Entry NIFTY",
-                "Current / Exit", "30m Return", "Status",
-            ]
+            ["Time", "Phase", "Trader", "Event", "Direction", "Entry", "Current / Exit", "P&L", "Status"]
         )
         tape.add_widget(self.live_tape)
         root.addWidget(tape, 1)
 
+        self.live_chart = MarketChart("ON-DEMAND NIFTY INSPECTION")
+        self.live_chart.set_timeframe("1m")
+        self.live_chart.setMaximumHeight(300)
+        self.live_chart.setVisible(False)
+        root.addWidget(self.live_chart)
+
         note = QLabel(
-            "Development playback is research visualization because the frozen strategy is selected "
-            "from the full development block. The blind segment is the authentic live-like test. "
-            "Trade outcomes are revealed only after simulated time reaches +30 minutes."
+            "Development is research visualization. Blind is the authentic frozen test. "
+            "Outcome and paper P&L are revealed only after simulated time reaches +30 minutes."
         )
         note.setWordWrap(True)
         note.setObjectName("Muted")
@@ -426,132 +425,67 @@ class ShadowTraderPage(QWidget):
         root.setContentsMargins(4, 8, 4, 4)
         root.setSpacing(8)
 
-        summary = Card("LATEST REPLAY RESULTS")
-        top = QHBoxLayout()
-        self.results_summary = QLabel(
-            "No historical replay has completed in this app session yet."
-        )
+        summary = Card("LATEST SHADOW ARENA RESULTS")
+        row = QHBoxLayout()
+        self.results_summary = QLabel("No Shadow Arena replay has completed in this app session yet.")
         self.results_summary.setWordWrap(True)
-        top.addWidget(self.results_summary, 1)
+        row.addWidget(self.results_summary, 1)
         self.results_export_button = QPushButton("↓  Export Full Review")
         self.results_export_button.setObjectName("SecondaryButton")
         self.results_export_button.setEnabled(False)
         self.results_export_button.clicked.connect(self._request_export)
-        top.addWidget(self.results_export_button)
-        summary.layout_box.addLayout(top)
+        row.addWidget(self.results_export_button)
+        summary.layout_box.addLayout(row)
         root.addWidget(summary)
 
-        self.results_strategy_metric = MetricCard("FROZEN STRATEGY")
-        self.results_range_metric = MetricCard("RANGE")
-        self.results_mode_metric = MetricCard("MODE")
-        self.results_period_metric = MetricCard("TEST PERIOD")
-        for metric in (
-            self.results_strategy_metric,
-            self.results_range_metric,
-            self.results_mode_metric,
-            self.results_period_metric,
-        ):
-            metric.set_value("—")
+        self.results_total_metric = MetricCard("TOTAL")
+        self.results_dev_metric = MetricCard("DEVELOPMENT")
+        self.results_blind_metric = MetricCard("BLIND")
+        self.results_capital_metric = MetricCard("STARTING CAPITAL / TRADER")
         root.addWidget(
             ResponsiveMetricGrid(
                 [
-                    self.results_strategy_metric,
-                    self.results_range_metric,
-                    self.results_mode_metric,
-                    self.results_period_metric,
+                    self.results_total_metric,
+                    self.results_dev_metric,
+                    self.results_blind_metric,
+                    self.results_capital_metric,
                 ],
                 compact_height=78,
             )
         )
 
-        self.results_win_metric = MetricCard("BLIND WIN RATE")
-        self.results_return_metric = MetricCard("BLIND AVG 30M RETURN")
-        self.results_pf_metric = MetricCard("BLIND PROFIT FACTOR")
-        self.results_dd_metric = MetricCard("BLIND MAX DRAWDOWN")
-        self.results_winner_metric = MetricCard("AVG WINNER")
-        self.results_loser_metric = MetricCard("AVG LOSER")
-        self.results_streak_metric = MetricCard("MAX LOSING STREAK")
-        self.results_signals_metric = MetricCard("BLIND SIGNALS")
-        for metric in (
-            self.results_win_metric,
-            self.results_return_metric,
-            self.results_pf_metric,
-            self.results_dd_metric,
-            self.results_winner_metric,
-            self.results_loser_metric,
-            self.results_streak_metric,
-            self.results_signals_metric,
-        ):
-            metric.set_value("—")
-        root.addWidget(
-            ResponsiveMetricGrid(
-                [
-                    self.results_win_metric,
-                    self.results_return_metric,
-                    self.results_pf_metric,
-                    self.results_dd_metric,
-                    self.results_winner_metric,
-                    self.results_loser_metric,
-                    self.results_streak_metric,
-                    self.results_signals_metric,
-                ],
-                compact_height=78,
-            )
-        )
-
-        curve = Card("BLIND CUMULATIVE SIGNED RETURN — PROXY")
-        self.results_curve = ReplayEquityCurve()
-        self.results_curve.setToolTip(
-            "Cumulative 30-minute signed NIFTY return for the frozen strategy in the blind period."
-        )
-        curve.add_widget(self.results_curve)
-        root.addWidget(curve)
-
-        comparison = Card("DEVELOPMENT VS BLIND")
-        self.results_comparison = DataTable(
+        tournament = Card("TIMEFRAME TOURNAMENT — BLIND PHASE")
+        self.results_tournament = DataTable(
             [
-                "Phase", "Sessions", "Signals", "Wins", "Losses", "Win Rate",
-                "Avg 30m", "Profit Factor", "Max DD", "Max Loss Streak",
+                "Trader", "Frozen Strategy", "Trades", "Wins", "Losses", "Win Rate",
+                "Avg Net 30m", "Profit Factor", "Start", "End", "Net P&L", "Return", "Max DD",
             ]
         )
-        comparison.add_widget(self.results_comparison)
-        root.addWidget(comparison)
+        tournament.add_widget(self.results_tournament)
+        root.addWidget(tournament)
 
-        candidates = Card("DEVELOPMENT STRATEGY CANDIDATES")
-        self.results_candidates = DataTable(
-            ["Strategy", "Signals", "30m Hit Rate", "Avg 30m Return", "Sample"]
-        )
-        candidates.add_widget(self.results_candidates)
-        root.addWidget(candidates)
-
-        trades = Card("TRADE-BY-TRADE REPLAY")
+        trades = Card("TRADE-BY-TRADE PAPER REPLAY")
         self.results_trades = DataTable(
             [
-                "Phase", "Time", "Direction", "Entry NIFTY", "Approx Exit 30m",
-                "+5m", "+15m", "+30m", "MFE", "MAE", "Result",
+                "Trader", "Phase", "Time", "Direction", "Entry", "Approx Exit",
+                "Gross 30m", "Net 30m", "Paper P&L", "Balance", "Result",
             ]
         )
         trades.add_widget(self.results_trades)
         root.addWidget(trades)
 
         rejected = Card("REJECTED SIGNALS")
-        self.results_rejected = QLabel(
-            "The current candle-proxy replay does not yet generate a separate rejected-signal "
-            "stream. This section will populate when the full decision/filter engine is wired "
-            "into historical replay."
-        )
-        self.results_rejected.setWordWrap(True)
+        self.results_rejected = DataTable(["Trader", "Phase", "Time", "Direction", "Reason"])
         rejected.add_widget(self.results_rejected)
         root.addWidget(rejected)
 
         limitation = Card("MONEY RESULT STATUS")
-        self.results_money_note = QLabel(
-            "Current results measure signed NIFTY movement. Exact option premium P&L, charges, "
-            "slippage and rupee drawdown stay unavailable until historical expired-option data "
-            "is connected. Intrader will not invent those numbers."
+        note = QLabel(
+            "Paper balances are directional NIFTY proxy accounts using your allocation and friction "
+            "settings. They are not exact historical option-premium P&L until expired-option data is connected."
         )
-        self.results_money_note.setWordWrap(True)
-        limitation.add_widget(self.results_money_note)
+        note.setWordWrap(True)
+        limitation.add_widget(note)
         root.addWidget(limitation)
         return page
 
@@ -559,64 +493,44 @@ class ShadowTraderPage(QWidget):
         page = QWidget()
         root = QVBoxLayout(page)
         root.setContentsMargins(4, 8, 4, 4)
-        root.setSpacing(8)
-
         card = Card("60 FUTURE TRADING SESSIONS")
         text = QLabel(
-            "After the historical strategy is locked, run the same rules on future live "
-            "market data using simulated execution. No real broker order is permitted. "
-            "Angel One option snapshots should be persisted permanently so Intrader retains "
-            "its own history after those contracts expire."
+            "After historical development and blind testing, the same frozen logic can be observed "
+            "against future live candles using simulated execution only. No real broker order is permitted."
         )
         text.setWordWrap(True)
         card.add_widget(text)
         root.addWidget(card)
-
         self.forward_progress = QProgressBar()
         self.forward_progress.setRange(0, self.plan.forward_sessions)
         self.forward_progress.setValue(0)
-        self.forward_progress.setFormat(
-            "Forward validation not started — %v / %m sessions completed"
-        )
+        self.forward_progress.setFormat("Forward validation — %v / %m sessions")
         root.addWidget(self.forward_progress)
-
-        rule = Card("PROMOTION RULE")
-        label = QLabel(
-            "Historical profitability alone is insufficient. Forward shadow results must be "
-            "evaluated after realistic friction and compared with the historical blind period "
-            "before any decision about live capital."
-        )
-        label.setWordWrap(True)
-        rule.add_widget(label)
-        root.addWidget(rule)
         root.addStretch(1)
         return page
 
     def _build_features(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setContentsMargins(4, 8, 4, 4)
-        root.setSpacing(8)
-
         intro = QLabel(
-            "High mode requests all 50 versioned features. Medium and Low deliberately use "
-            "smaller family sets so we can compare whether extra data genuinely improves "
-            "expectancy or only adds complexity. SENSEX remains measured evidence, not a "
-            "hard-coded cause of NIFTY movement."
+            "High mode requests all 50 versioned feature touchpoints. Medium and Low deliberately "
+            "request smaller families so additional data can be tested rather than assumed useful."
         )
         intro.setWordWrap(True)
         root.addWidget(intro)
-
         table = DataTable(["Family", "Feature", "Role"])
         rows = []
         for family, features in FEATURE_FAMILIES:
             for feature in features:
-                role = (
-                    "Measured cross-index evidence"
-                    if family == "SENSEX confirmation"
-                    else "Candidate model input"
+                rows.append(
+                    [
+                        family,
+                        feature,
+                        "Measured cross-index evidence"
+                        if family == "SENSEX confirmation"
+                        else "Candidate model input",
+                    ]
                 )
-                rows.append([family, feature, role])
         table.set_rows(rows)
         root.addWidget(table, 1)
         return page
@@ -624,17 +538,12 @@ class ShadowTraderPage(QWidget):
     def _build_data(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setContentsMargins(4, 8, 4, 4)
-        root.setSpacing(8)
-
         table = DataTable(["Dataset", "Source", "Status", "Rule"])
         table.set_rows([list(row) for row in DATA_COVERAGE])
         root.addWidget(table, 1)
-
         note = QLabel(
-            "Upstox expired-options history stays PENDING until account reactivation. "
-            "High mode must mark unavailable historical option families as missing; it must "
-            "never manufacture them. Nothing here replaces the existing Angel One pipeline."
+            "Requested replay length is limited by what the connected historical sources actually provide. "
+            "Unavailable historical option families stay missing rather than being synthesized."
         )
         note.setWordWrap(True)
         root.addWidget(note)
@@ -643,80 +552,93 @@ class ShadowTraderPage(QWidget):
     def _build_news(self) -> QWidget:
         page = QWidget()
         root = QVBoxLayout(page)
-        root.setContentsMargins(4, 8, 4, 4)
-        root.setSpacing(8)
-
         note = QLabel(
-            "These are research resources for the embedded browser. During historical replay, "
-            "only timestamped information already published by the simulated time may be used."
+            "During historical replay, only timestamped information published at or before the simulated clock may be used."
         )
         note.setWordWrap(True)
         root.addWidget(note)
-
         table = DataTable(["Resource", "URL", "Use"])
         table.set_rows(
-            [
-                [name, url, "Live/manual market context and timestamped research"]
-                for name, url in NEWS_RESOURCES
-            ]
+            [[name, url, "Timestamped research / market context"] for name, url in NEWS_RESOURCES]
         )
         root.addWidget(table, 1)
         return page
 
+    def selected_config(self) -> ShadowReplayConfig:
+        frames = tuple(
+            timeframe
+            for timeframe, check in self.trader_checks.items()
+            if check.isChecked()
+        )
+        return validate_replay_config(
+            ShadowReplayConfig(
+                development_sessions=self.development_days.value(),
+                blind_sessions=self.blind_days.value(),
+                mode_key=str(self.replay_mode.currentData()),
+                starting_capital=Decimal(str(self.starting_capital.value())),
+                allocation_pct=Decimal(str(self.allocation_pct.value())),
+                friction_bps=Decimal(str(self.friction_bps.value())),
+                trader_timeframes=frames,
+            )
+        )
+
     def selected_replay_sessions(self) -> int:
-        return int(self.replay_range.currentData())
+        return self.development_days.value() + self.blind_days.value()
 
     def selected_replay_mode(self) -> str:
         return str(self.replay_mode.currentData())
 
-    def _sync_replay_controls(self) -> None:
-        sessions = self.selected_replay_sessions()
-        mode = replay_mode(self.selected_replay_mode())
-        development, blind = development_blind_split(sessions)
-        self.historical_progress.setRange(0, sessions)
+    def _sync_replay_controls(self, *_args) -> None:
+        try:
+            config = self.selected_config()
+            valid = True
+        except ValueError as exc:
+            valid = False
+            config = None
+            self.split_text.setText(str(exc))
+        self.replay_start_button.setEnabled(valid and not self._replay_running)
+        if config is None:
+            return
+        mode = replay_mode(config.mode_key)
+        self._latest_config = config
+        self.historical_progress.setRange(0, config.total_sessions)
         if not self._replay_running:
             self.historical_progress.setValue(0)
         self.mode_description.setText(
-            f"{mode.label.upper()} MODE — {mode.feature_count} touchpoints. "
-            f"{mode.description}"
+            f"{mode.label.upper()} MODE — {mode.feature_count} requested touchpoints. {mode.description}"
         )
         self.split_text.setText(
-            f"{development} development sessions + {blind} locked blind sessions. "
-            "The blind segment starts only after the replay configuration is frozen."
+            f"{config.development_sessions} development + {config.blind_sessions} blind = "
+            f"{config.total_sessions} trading sessions. Blind starts only after all timeframe "
+            "strategies are frozen. Source availability is the final historical limit."
         )
+        self.setup_total_metric.set_value(str(config.total_sessions))
+        self.setup_dev_metric.set_value(str(config.development_sessions))
+        self.setup_blind_metric.set_value(str(config.blind_sessions))
+        self.setup_money_metric.set_value(f"₹{config.starting_capital:,.0f}")
 
     def _request_replay(self) -> None:
         if self._replay_running:
             return
+        try:
+            config = self.selected_config()
+        except ValueError as exc:
+            self.replay_status.setText(f"CONFIGURATION ERROR — {exc}")
+            return
+        self._latest_config = config
         self._replay_running = True
         self.replay_start_button.setEnabled(False)
-        self.replay_range.setEnabled(False)
-        self.replay_mode.setEnabled(False)
         self.replay_export_button.setEnabled(False)
-        self.replay_status.setText(
-            "STARTING — preparing timestamp-causal historical data and replay state…"
-        )
-        self.replay_requested.emit(
-            self.selected_replay_sessions(),
-            self.selected_replay_mode(),
-        )
+        self.replay_status.setText("STARTING — preparing causal history and the four-trader tournament…")
+        self.replay_requested.emit(config)
 
     def _request_export(self) -> None:
-        self.replay_export_requested.emit(
-            self.selected_replay_sessions(),
-            self.selected_replay_mode(),
-        )
+        self.replay_export_requested.emit(self._latest_config)
 
-    def set_replay_progress(
-        self,
-        completed: int,
-        total: int,
-        status: str,
-    ) -> None:
+    def set_replay_progress(self, completed: int, total: int, status: str) -> None:
         total = max(1, int(total))
-        completed = max(0, min(int(completed), total))
         self.historical_progress.setRange(0, total)
-        self.historical_progress.setValue(completed)
+        self.historical_progress.setValue(max(0, min(int(completed), total)))
         self.historical_progress.setFormat("%v / %m trading sessions")
         self.replay_status.setText(status)
 
@@ -725,291 +647,282 @@ class ShadowTraderPage(QWidget):
         return "N/A" if value is None else f"{value:.{digits}f}%"
 
     @staticmethod
+    def _fmt_money(value) -> str:
+        return "N/A" if value is None else f"₹{value:,.2f}"
+
+    @staticmethod
     def _fmt_number(value, digits: int = 2) -> str:
         return "N/A" if value is None else f"{value:.{digits}f}"
 
     def set_replay_report(self, report, *, open_results: bool = True) -> None:
-        strategy = report.selected_strategy_name or "None"
-        self.replay_strategy_metric.set_value(strategy)
-        self.replay_win_metric.set_value(
-            self._fmt_pct(report.blind.win_rate_pct, 2)
-        )
-        self.replay_expectancy_metric.set_value(
-            self._fmt_pct(report.blind.average_return_30m_pct, 4)
-        )
-        self.replay_signal_metric.set_value(str(report.blind.evaluable_signals))
-
+        config = report.config
+        self._latest_config = config
         self.results_summary.setText(
-            f"{report.actual_sessions} trading sessions completed in {report.mode} mode. "
-            f"The strategy was selected only from the first {report.development_sessions} "
-            f"development sessions and then frozen for {report.blind_sessions} blind sessions."
+            f"{report.actual_sessions} sessions completed: {config.development_sessions} development + "
+            f"{config.blind_sessions} blind. {len(report.trader_reports)} timeframe traders were tested independently."
         )
-        self.results_strategy_metric.set_value(strategy)
-        self.results_range_metric.set_value(f"{report.actual_sessions} sessions")
-        self.results_mode_metric.set_value(
-            f"{report.mode} • {report.requested_touchpoints} touchpoints"
-        )
-        self.results_period_metric.set_value(
-            f"{report.first_session or '—'} → {report.last_session or '—'}"
-        )
+        self.results_total_metric.set_value(str(report.actual_sessions))
+        self.results_dev_metric.set_value(str(config.development_sessions))
+        self.results_blind_metric.set_value(str(config.blind_sessions))
+        self.results_capital_metric.set_value(self._fmt_money(config.starting_capital))
 
-        blind = report.blind
-        self.results_win_metric.set_value(self._fmt_pct(blind.win_rate_pct, 2))
-        self.results_return_metric.set_value(
-            self._fmt_pct(blind.average_return_30m_pct, 4)
-        )
-        self.results_pf_metric.set_value(
-            self._fmt_number(blind.profit_factor, 3)
-        )
-        self.results_dd_metric.set_value(
-            f"{blind.max_drawdown_pct_points:.4f} pp"
-        )
-        self.results_winner_metric.set_value(
-            self._fmt_pct(blind.average_winner_pct, 4)
-        )
-        self.results_loser_metric.set_value(
-            self._fmt_pct(blind.average_loser_pct, 4)
-        )
-        self.results_streak_metric.set_value(str(blind.max_losing_streak))
-        self.results_signals_metric.set_value(str(blind.evaluable_signals))
-
-        def metrics_row(label, metrics):
-            return [
-                label,
-                metrics.sessions,
-                metrics.evaluable_signals,
-                metrics.wins,
-                metrics.losses,
-                self._fmt_pct(metrics.win_rate_pct, 2),
-                self._fmt_pct(metrics.average_return_30m_pct, 4),
-                self._fmt_number(metrics.profit_factor, 3),
-                f"{metrics.max_drawdown_pct_points:.4f} pp",
-                metrics.max_losing_streak,
-            ]
-
-        self.results_comparison.set_rows(
-            [
-                metrics_row("DEVELOPMENT", report.development),
-                metrics_row("BLIND", report.blind),
-            ]
-        )
-
-        self.results_candidates.set_rows(
-            [
+        tournament_rows = []
+        trade_rows = []
+        rejected_rows = []
+        for trader in report.trader_reports:
+            metrics = trader.blind_metrics
+            paper = trader.blind_paper
+            tournament_rows.append(
                 [
-                    candidate.strategy_name,
-                    candidate.signals,
-                    self._fmt_pct(candidate.hit_rate_30m_pct, 2),
-                    self._fmt_pct(candidate.average_return_30m_pct, 4),
-                    candidate.sample_label,
+                    trader.trader_label,
+                    trader.selected_strategy_name or "None",
+                    metrics.trades,
+                    metrics.wins,
+                    metrics.losses,
+                    self._fmt_pct(metrics.win_rate_pct, 2),
+                    self._fmt_pct(metrics.average_return_pct, 4),
+                    self._fmt_number(metrics.profit_factor, 3),
+                    self._fmt_money(paper.starting_capital),
+                    self._fmt_money(paper.ending_capital),
+                    self._fmt_money(paper.net_pnl),
+                    self._fmt_pct(paper.return_pct, 3),
+                    self._fmt_pct(paper.max_drawdown_pct, 3),
                 ]
-                for candidate in report.candidates
-            ]
-        )
+            )
+            for trade in trader.trades:
+                trade_rows.append(
+                    [
+                        trader.trader_label,
+                        trade.phase,
+                        trade.at.replace("T", " ")[:16],
+                        trade.direction,
+                        f"{trade.entry_underlying:.2f}",
+                        "N/A" if trade.approx_exit_underlying_30m is None else f"{trade.approx_exit_underlying_30m:.2f}",
+                        self._fmt_pct(trade.gross_return_30m_pct, 4),
+                        self._fmt_pct(trade.net_return_30m_pct, 4),
+                        self._fmt_money(trade.paper_pnl),
+                        self._fmt_money(trade.paper_balance_after),
+                        trade.result,
+                    ]
+                )
+            for rejected in trader.rejected_signals:
+                rejected_rows.append(
+                    [
+                        rejected.trader_label,
+                        rejected.phase,
+                        rejected.at.replace("T", " ")[:16],
+                        rejected.direction,
+                        rejected.reason,
+                    ]
+                )
 
-        self.results_trades.set_rows(
-            [
-                [
-                    trade.phase,
-                    trade.at.replace("T", " ")[:16],
-                    trade.direction,
-                    f"{trade.entry_underlying:.2f}",
-                    (
-                        "N/A"
-                        if trade.approx_exit_underlying_30m is None
-                        else f"{trade.approx_exit_underlying_30m:.2f}"
-                    ),
-                    self._fmt_pct(trade.return_5m_pct, 4),
-                    self._fmt_pct(trade.return_15m_pct, 4),
-                    self._fmt_pct(trade.return_30m_pct, 4),
-                    self._fmt_pct(trade.mfe_30m_pct, 4),
-                    self._fmt_pct(trade.mae_30m_pct, 4),
-                    trade.result,
-                ]
-                for trade in report.trades
-            ]
-        )
-
-        self.results_curve.set_returns(
-            [
-                trade.return_30m_pct
-                for trade in report.trades
-                if trade.phase == "BLIND"
-            ]
-        )
+        self.results_tournament.set_rows(tournament_rows)
+        self.results_trades.set_rows(sorted(trade_rows, key=lambda row: row[2]))
+        self.results_rejected.set_rows(sorted(rejected_rows, key=lambda row: row[2]))
         self.results_export_button.setEnabled(True)
         if open_results:
             self.tabs.setCurrentIndex(self.results_tab_index)
 
     def begin_visual_playback(self, candles, report) -> None:
-        """Animate a display-only historical playback without changing replay results."""
-
         self._playback_timer.stop()
         self._playback_candles = tuple(sorted(candles, key=lambda item: item.at))
         self._playback_report = report
         self._playback_index = 0
-        self._playback_trade_index = 0
-        self._playback_trades = tuple(
-            sorted(
-                report.trades,
-                key=lambda trade: datetime.fromisoformat(trade.at),
-            )
-        )
-        self._playback_open = []
+        events = []
+        for trader in report.trader_reports:
+            for trade in trader.trades:
+                events.append((datetime.fromisoformat(trade.at), "OPEN", trade))
+                events.append((datetime.fromisoformat(trade.at) + timedelta(minutes=30), "CLOSE", trade))
+            for rejected in trader.rejected_signals:
+                events.append((datetime.fromisoformat(rejected.at), "REJECT", rejected))
+        self._playback_events = tuple(sorted(events, key=lambda item: (item[0], item[1])))
+        self._playback_event_index = 0
+        self._playback_open = {timeframe: [] for timeframe in DEFAULT_TRADER_TIMEFRAMES}
         self._playback_tape_rows = []
-        self._playback_realized = 0.0
-        self._playback_session_dates = tuple(sorted({
-            candle.at.date() for candle in self._playback_candles
-        }))
-        self._playback_last_chart_at = None
+        self._playback_session_dates = tuple(sorted({candle.at.date() for candle in self._playback_candles}))
+        self._playback_phase = None
+        self._arena_runtime = {}
+        for timeframe in DEFAULT_TRADER_TIMEFRAMES:
+            self._arena_runtime[timeframe] = {
+                "balance": report.config.starting_capital,
+                "peak": report.config.starting_capital,
+                "wins": 0,
+                "losses": 0,
+            }
+            self._refresh_trader_card(timeframe, "WAIT")
         self.live_tape.set_rows([])
-        self.live_chart.set_empty_message("Preparing simulated historical playback…")
+        self.live_chart.setVisible(False)
+        self.live_chart_button.setText("Open Chart")
+        self.live_chart_button.setEnabled(bool(self._playback_candles))
         self.live_pause_button.setEnabled(bool(self._playback_candles))
-        self.live_pause_button.setText("Ⅱ  Pause")
         self.live_skip_button.setEnabled(bool(self._playback_candles))
+        self.live_pause_button.setText("Ⅱ  Pause")
         self.tabs.setCurrentIndex(self.live_tab_index)
 
         if not self._playback_candles:
-            self.live_status.setText("No candles are available for visual playback.")
+            self.live_status.setText("No candles are available for Shadow Arena playback.")
             self._finish_playback()
             return
-
         self.live_status.setText(
-            "PLAYING — historical candles are being revealed chronologically. "
-            "No future trade outcome is shown before simulated +30 minutes."
+            "PLAYING — four independent paper traders are competing on the same causal historical stream."
         )
         self._playback_timer.start()
 
     def _playback_speed(self) -> int:
-        value = self.live_speed.currentData()
         try:
-            return max(1, int(value))
+            return max(1, int(self.live_speed.currentData()))
         except (TypeError, ValueError):
             return 500
 
-    def _playback_phase(self, day) -> tuple[str, int]:
-        try:
-            session_index = self._playback_session_dates.index(day)
-        except ValueError:
-            return "UNKNOWN", 0
-        report = self._playback_report
-        if report is None:
-            return "UNKNOWN", session_index + 1
-        if session_index < report.development_sessions:
-            return "DEVELOPMENT", session_index + 1
-        return "BLIND — FROZEN", session_index + 1
+    def _phase_for_session(self, session_number: int) -> str:
+        if self._playback_report is None:
+            return "UNKNOWN"
+        if session_number <= self._playback_report.config.development_sessions:
+            return "DEVELOPMENT"
+        return "BLIND — FROZEN"
 
-    def _append_tape_row(self, row: list[object]) -> None:
+    def _reset_arena_phase(self, phase: str) -> None:
+        if self._playback_phase == phase:
+            return
+        self._playback_phase = phase
+        if phase.startswith("BLIND") and self._playback_report is not None:
+            start = self._playback_report.config.starting_capital
+            for timeframe in self._arena_runtime:
+                self._arena_runtime[timeframe] = {
+                    "balance": start,
+                    "peak": start,
+                    "wins": 0,
+                    "losses": 0,
+                }
+                self._playback_open[timeframe] = []
+                self._refresh_trader_card(timeframe, "WAIT")
+            self._append_event_row(["—", "BLIND", "ALL", "RESET", "—", "—", "—", "—", "Accounts reset"])
+
+    def _append_event_row(self, row: list[object]) -> None:
         self._playback_tape_rows.append(row)
-        self._playback_tape_rows = self._playback_tape_rows[-60:]
+        self._playback_tape_rows = self._playback_tape_rows[-80:]
         self.live_tape.set_rows(self._playback_tape_rows)
 
-    def _open_due_trades(self, current_at: datetime) -> None:
-        while self._playback_trade_index < len(self._playback_trades):
-            trade = self._playback_trades[self._playback_trade_index]
-            opened_at = datetime.fromisoformat(trade.at)
-            if opened_at > current_at:
+    def _refresh_trader_card(self, timeframe: int, state: str | None = None) -> None:
+        controls = self.trader_cards[timeframe]
+        runtime = self._arena_runtime.get(timeframe, {})
+        balance = Decimal(runtime.get("balance", self._latest_config.starting_capital))
+        peak = Decimal(runtime.get("peak", balance))
+        wins = int(runtime.get("wins", 0))
+        losses = int(runtime.get("losses", 0))
+        if state is not None:
+            controls["state"].setText(state)
+        pnl = balance - self._latest_config.starting_capital
+        drawdown = Decimal(0) if peak == 0 else (peak - balance) / peak * Decimal(100)
+        controls["balance"].setText(f"Balance  ₹{balance:,.2f}")
+        controls["pnl"].setText(f"P&L  {pnl:+,.2f}")
+        controls["wl"].setText(f"W {wins} / L {losses}")
+        controls["dd"].setText(f"Drawdown  {drawdown:.2f}%")
+
+    def _process_playback_events(self, current_at: datetime) -> None:
+        while self._playback_event_index < len(self._playback_events):
+            at, event_type, payload = self._playback_events[self._playback_event_index]
+            if at > current_at:
                 break
-            self._playback_trade_index += 1
-            self._playback_open.append((trade, opened_at))
-            self._append_tape_row(
-                [
-                    opened_at.strftime("%d %b %H:%M"),
-                    trade.phase,
-                    "OPEN",
-                    trade.direction,
-                    f"{trade.entry_underlying:.2f}",
-                    "—",
-                    "hidden",
-                    "ACTIVE",
-                ]
-            )
-
-    def _close_due_trades(self, current_at: datetime) -> None:
-        still_open: list[tuple[object, datetime]] = []
-        for trade, opened_at in self._playback_open:
-            if current_at < opened_at + timedelta(minutes=30):
-                still_open.append((trade, opened_at))
+            self._playback_event_index += 1
+            timeframe = int(payload.timeframe_minutes)
+            if event_type == "REJECT":
+                self._append_event_row(
+                    [
+                        at.strftime("%d %b %H:%M"),
+                        payload.phase,
+                        payload.trader_label,
+                        "REJECT",
+                        payload.direction,
+                        "—",
+                        "—",
+                        "—",
+                        "POSITION BUSY",
+                    ]
+                )
                 continue
-            value = trade.return_30m_pct
-            if value is not None:
-                self._playback_realized += float(value)
-            self._append_tape_row(
+            if event_type == "OPEN":
+                self._playback_open[timeframe].append((payload, at))
+                self._refresh_trader_card(timeframe, payload.direction)
+                self._append_event_row(
+                    [
+                        at.strftime("%d %b %H:%M"),
+                        payload.phase,
+                        payload.trader_label,
+                        "OPEN",
+                        payload.direction,
+                        f"{payload.entry_underlying:.2f}",
+                        "—",
+                        "hidden",
+                        "ACTIVE",
+                    ]
+                )
+                continue
+
+            runtime = self._arena_runtime[timeframe]
+            if payload.paper_balance_after is not None:
+                runtime["balance"] = payload.paper_balance_after
+                runtime["peak"] = max(Decimal(runtime["peak"]), payload.paper_balance_after)
+            if payload.result == "WIN":
+                runtime["wins"] = int(runtime["wins"]) + 1
+            elif payload.result == "LOSS":
+                runtime["losses"] = int(runtime["losses"]) + 1
+            self._playback_open[timeframe] = [
+                item for item in self._playback_open[timeframe] if item[0] is not payload
+            ]
+            state = "WAIT" if not self._playback_open[timeframe] else self._playback_open[timeframe][-1][0].direction
+            self._refresh_trader_card(timeframe, state)
+            self._append_event_row(
                 [
-                    current_at.strftime("%d %b %H:%M"),
-                    trade.phase,
+                    at.strftime("%d %b %H:%M"),
+                    payload.phase,
+                    payload.trader_label,
                     "CLOSE +30m",
-                    trade.direction,
-                    f"{trade.entry_underlying:.2f}",
-                    (
-                        "N/A"
-                        if trade.approx_exit_underlying_30m is None
-                        else f"{trade.approx_exit_underlying_30m:.2f}"
-                    ),
-                    self._fmt_pct(value, 4),
-                    trade.result,
+                    payload.direction,
+                    f"{payload.entry_underlying:.2f}",
+                    "N/A" if payload.approx_exit_underlying_30m is None else f"{payload.approx_exit_underlying_30m:.2f}",
+                    self._fmt_money(payload.paper_pnl),
+                    payload.result,
                 ]
             )
-        self._playback_open = still_open
-
-    def _current_shadow_state(self, current_price) -> str:
-        if not self._playback_open:
-            return "WAIT / NO OPEN SIGNAL"
-        trade, _opened_at = self._playback_open[-1]
-        entry = float(trade.entry_underlying)
-        price = float(current_price)
-        signed = ((price - entry) / entry) * 100.0
-        if "PUT" in trade.direction or "SHORT" in trade.direction:
-            signed *= -1.0
-        return f"{trade.direction} • {signed:+.3f}% proxy"
 
     def _playback_tick(self) -> None:
         if not self._playback_candles or self._playback_index >= len(self._playback_candles):
             self._finish_playback()
             return
 
-        speed = self._playback_speed()
-        candles_per_tick = max(1, int(speed * self._playback_timer.interval() / 1000))
-        next_index = min(
-            len(self._playback_candles),
-            self._playback_index + candles_per_tick,
-        )
+        candles_per_tick = max(1, int(self._playback_speed() * self._playback_timer.interval() / 1000))
+        next_index = min(len(self._playback_candles), self._playback_index + candles_per_tick)
         current = self._playback_candles[next_index - 1]
         self._playback_index = next_index
 
-        current_at = current.at
-        self._open_due_trades(current_at)
-        self._close_due_trades(current_at)
+        try:
+            session_number = self._playback_session_dates.index(current.at.date()) + 1
+        except ValueError:
+            session_number = 1
+        phase = self._phase_for_session(session_number)
+        self._reset_arena_phase(phase)
+        self._process_playback_events(current.at)
 
-        phase, session_number = self._playback_phase(current_at.date())
-        self.live_clock_metric.set_value(current_at.strftime("%d %b %Y • %H:%M"))
+        self.live_clock_metric.set_value(current.at.strftime("%d %b %Y • %H:%M"))
         self.live_phase_metric.set_value(phase)
         self.live_price_metric.set_value(f"{float(current.close):,.2f}")
-        self.live_action_metric.set_value(self._current_shadow_state(current.close))
-        self.live_proxy_metric.set_value(f"{self._playback_realized:+.4f}%")
-        self.live_session_metric.set_value(
-            f"{session_number} / {len(self._playback_session_dates)}"
+        self.live_session_metric.set_value(f"{session_number} / {len(self._playback_session_dates)}")
+
+        if self.live_chart.isVisible():
+            visible = [
+                candle
+                for candle in self._playback_candles[:next_index]
+                if candle.at.date() == current.at.date()
+            ][-120:]
+            if visible:
+                self.live_chart.set_candle_objects(visible)
+
+        self.set_replay_progress(
+            session_number,
+            len(self._playback_session_dates),
+            f"SHADOW ARENA — {phase} • {current.at.strftime('%d %b %H:%M')}",
         )
-
-        current_day = current_at.date()
-        visible = [
-            candle
-            for candle in self._playback_candles[:next_index]
-            if candle.at.date() == current_day
-        ][-120:]
-        if visible:
-            self.live_chart.set_candle_objects(visible)
-
-        report = self._playback_report
-        if report is not None:
-            self.set_replay_progress(
-                min(session_number, report.requested_sessions),
-                report.requested_sessions,
-                (
-                    f"VISUAL REPLAY — {phase} • {current_at.strftime('%d %b %H:%M')} • "
-                    f"{len(self._playback_open)} active research signal(s)"
-                ),
-            )
 
         if self._playback_index >= len(self._playback_candles):
             self._finish_playback()
@@ -1022,22 +935,24 @@ class ShadowTraderPage(QWidget):
         elif self._playback_candles and self._playback_index < len(self._playback_candles):
             self._playback_timer.start()
             self.live_pause_button.setText("Ⅱ  Pause")
-            self.live_status.setText(
-                "PLAYING — historical candles are being revealed chronologically."
-            )
+            self.live_status.setText("PLAYING — Shadow Arena resumed.")
+
+    def _toggle_live_chart(self) -> None:
+        visible = not self.live_chart.isVisible()
+        self.live_chart.setVisible(visible)
+        self.live_chart_button.setText("Hide Chart" if visible else "Open Chart")
 
     def _finish_playback(self) -> None:
-        was_running = self._playback_timer.isActive() or (
+        active = self._playback_timer.isActive() or (
             self._playback_candles and self._playback_index < len(self._playback_candles)
         )
         self._playback_timer.stop()
         self.live_pause_button.setEnabled(False)
         self.live_skip_button.setEnabled(False)
+        self.live_chart_button.setEnabled(False)
         if self._playback_report is not None:
-            self.live_status.setText(
-                "PLAYBACK COMPLETE — opening the locked replay results."
-            )
-        if was_running or self._playback_report is not None:
+            self.live_status.setText("PLAYBACK COMPLETE — opening tournament results.")
+        if active or self._playback_report is not None:
             self.playback_finished.emit()
 
     def show_replay_results(self) -> None:
@@ -1046,33 +961,25 @@ class ShadowTraderPage(QWidget):
     def set_replay_finished(self, status: str) -> None:
         self._replay_running = False
         self.replay_start_button.setEnabled(True)
-        self.replay_range.setEnabled(True)
-        self.replay_mode.setEnabled(True)
         self.replay_export_button.setEnabled(True)
         self.replay_status.setText(status)
+        self._sync_replay_controls()
 
     def set_replay_failed(self, status: str) -> None:
         self.set_replay_finished(f"FAILED — {status}")
 
     def refresh(self, desktop) -> None:
-        """Refresh only from existing immutable shadow records."""
-
         trade = desktop.active_shadow_trade
         if trade is None:
-            self.active_text.setText("No active shadow trade.")
+            self.active_text.setText("No active forward shadow trade.")
         else:
             self.active_text.setText(
-                f"{trade.action}\n"
-                f"{trade.strike} {trade.option_type}\n"
-                f"Entry {trade.entry_price} • Stop {trade.stop_price} • "
-                f"Target {trade.target_price}\n"
+                f"{trade.action}\n{trade.strike} {trade.option_type}\n"
+                f"Entry {trade.entry_price} • Stop {trade.stop_price} • Target {trade.target_price}\n"
                 f"Quantity {trade.quantity} • {trade.shadow_version}"
             )
-
         rows = []
-        for _decision, completed_trade, outcome in reversed(
-            desktop.completed_bundles[-50:]
-        ):
+        for _decision, completed_trade, outcome in reversed(desktop.completed_bundles[-50:]):
             rows.append(
                 [
                     completed_trade.opened_at.strftime("%Y-%m-%d %H:%M"),

@@ -5,11 +5,15 @@ from intrader.shadow_lab import (
     DEFAULT_SHADOW_LAB_PLAN,
     FEATURE_FAMILIES,
     NEWS_RESOURCES,
+    DEFAULT_TRADER_TIMEFRAMES,
+    MAX_REPLAY_SESSION_INPUT,
     REPLAY_MODES,
     REPLAY_SESSION_OPTIONS,
+    ShadowReplayConfig,
     development_blind_split,
     flattened_features,
     replay_mode,
+    validate_replay_config,
 )
 
 
@@ -56,11 +60,19 @@ def test_expired_options_are_explicitly_pending() -> None:
     assert "Angel One" in rule
 
 
-def test_replay_ranges_and_splits_are_locked() -> None:
-    assert REPLAY_SESSION_OPTIONS == (30, 60, 90)
+def test_replay_presets_remain_but_custom_splits_are_supported() -> None:
+    assert REPLAY_SESSION_OPTIONS == (30, 60, 90, 250)
+    assert MAX_REPLAY_SESSION_INPUT == 500
     assert development_blind_split(30) == (20, 10)
-    assert development_blind_split(60) == (40, 20)
-    assert development_blind_split(90) == (60, 30)
+    config = validate_replay_config(
+        ShadowReplayConfig(
+            development_sessions=1,
+            blind_sessions=1,
+            trader_timeframes=(1, 5, 10, 15),
+        )
+    )
+    assert config.total_sessions == 2
+    assert config.trader_timeframes == DEFAULT_TRADER_TIMEFRAMES
 
 
 def test_low_medium_high_touchpoints_are_monotonic() -> None:

@@ -244,6 +244,7 @@ def run_candle_proxy_replay(
         (),
         development_candles[0].at,
         development_candles[-1].at,
+        max_days=220,
     )
     selected_strategy = _pick_strategy(
         development_snapshot,
@@ -255,6 +256,7 @@ def run_candle_proxy_replay(
         (),
         blind_candles[0].at,
         blind_candles[-1].at,
+        max_days=220,
     )
     strategy_id = (
         None

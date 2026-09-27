@@ -64,8 +64,21 @@ def _run_git(root: Path, *args: str) -> str:
             text=True,
             timeout=45,
         )
-    except (OSError, subprocess.SubprocessError):
-        raise UpdateError("Git update command failed") from None
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        if detail:
+            detail = detail.replace("\\r", " ").replace("\\n", " ")
+            if len(detail) > 500:
+                detail = detail[:497] + "..."
+            raise UpdateError(f"Git command failed: {detail}") from None
+        raise UpdateError("Git command failed with no diagnostic output") from None
+    except subprocess.TimeoutExpired:
+        raise UpdateError("Git update command timed out") from None
+    except OSError as exc:
+        detail = str(exc).strip()
+        raise UpdateError(
+            f"Git could not be started: {detail or 'git executable unavailable'}"
+        ) from None
     return completed.stdout.strip()
 
 
@@ -175,11 +188,33 @@ class UpdateService:
             raise UpdateError(f"Switch to {UPDATE_BRANCH} before updating.")
         if _run_git(self.root, "status", "--porcelain"):
             raise UpdateError("Tracked local changes must be committed or stashed first.")
-        output = _run_git(
-            self.root, "pull", "--ff-only", "origin", UPDATE_BRANCH
+
+        # Fetch and inspect the graph explicitly instead of relying on git pull.
+        # This keeps the updater fast-forward-only and never discards local commits.
+        _run_git(self.root, "fetch", "origin", UPDATE_BRANCH)
+        remote = f"origin/{UPDATE_BRANCH}"
+        local_only = int(
+            _run_git(self.root, "rev-list", "--count", f"{remote}..HEAD") or "0"
         )
+        remote_only = int(
+            _run_git(self.root, "rev-list", "--count", f"HEAD..{remote}") or "0"
+        )
+
+        if local_only:
+            raise UpdateError(
+                f"Local {UPDATE_BRANCH} has {local_only} commit(s) not present on GitHub. "
+                "Intrader will not overwrite them automatically. Push, merge, or reset them manually."
+            )
+        if remote_only == 0:
+            return UpdateApplyResult(
+                "Intrader is already up to date.",
+                restart_required=False,
+                exit_to_install=False,
+            )
+
+        output = _run_git(self.root, "merge", "--ff-only", remote)
         return UpdateApplyResult(
-            output or "Update applied.",
+            output or f"Fast-forwarded {remote_only} commit(s).",
             restart_required=True,
             exit_to_install=False,
         )

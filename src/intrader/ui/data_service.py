@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -18,8 +18,14 @@ from intrader.historical_reanalysis import reanalyze_stored_decision
 from intrader.historical import Candle, INDIA_TIME, fetch_candles
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
-from intrader.shadow_arena import ShadowArenaReport, run_shadow_arena
-from intrader.shadow_lab import MAX_REPLAY_SESSION_INPUT, ShadowReplayConfig, validate_replay_config
+from intrader.shadow_arena import FeatureCoverageAudit, ShadowArenaReport, run_shadow_arena
+from intrader.shadow_lab import (
+    FEATURE_FAMILIES,
+    MAX_REPLAY_SESSION_INPUT,
+    ShadowReplayConfig,
+    replay_mode,
+    validate_replay_config,
+)
 from intrader.shadow_replay import ShadowReplayReport, run_candle_proxy_replay
 from intrader.storage import SQLiteStore
 from intrader.strategy_lab import analyze_strategies
@@ -357,16 +363,98 @@ class DesktopDataService:
             mode_key=mode_key,
         )
 
+    def _shadow_feature_coverage(
+        self,
+        start: datetime,
+        end: datetime,
+        mode_key: str,
+    ) -> FeatureCoverageAudit:
+        """Report requested, stored and decision-used historical feature families."""
+
+        mode = replay_mode(mode_key)
+        with SQLiteStore(self.database_path) as store:
+            counts = {
+                "candles": store.count_time_range_rows(
+                    "candles", start=start, end=end
+                ),
+                "future_snapshots": store.count_time_range_rows(
+                    "future_snapshots", start=start, end=end
+                ),
+                "option_snapshots": store.count_time_range_rows(
+                    "option_snapshots", start=start, end=end
+                ),
+                "index_snapshots": store.count_time_range_rows(
+                    "index_snapshots", start=start, end=end
+                ),
+                "breadth_snapshots": store.count_time_range_rows(
+                    "breadth_snapshots", start=start, end=end
+                ),
+                "news_items": store.count_time_range_rows(
+                    "news_items", start=start, end=end
+                ),
+                "scheduled_events": store.count_time_range_rows(
+                    "scheduled_events", start=start, end=end
+                ),
+            }
+
+        available = set()
+        if counts["candles"] > 0:
+            available.update(
+                ("NIFTY price / structure", "Momentum / volatility")
+            )
+        if counts["future_snapshots"] > 0:
+            available.add("Futures")
+        if counts["option_snapshots"] > 0:
+            available.update(("Options", "Options microstructure"))
+        if counts["breadth_snapshots"] > 0:
+            available.add("Breadth / constituents")
+        if (
+            counts["index_snapshots"] > 0
+            or counts["news_items"] > 0
+            or counts["scheduled_events"] > 0
+        ):
+            available.add("Volatility / macro context")
+        if counts["news_items"] > 0 or counts["scheduled_events"] > 0:
+            available.add("News / regime / time")
+
+        # The current frozen strategy engine is candle-derived. Extra stored
+        # families are audited here but are not allowed to masquerade as inputs
+        # until a causal adapter is explicitly wired into engine decisions.
+        decision_used = tuple(
+            family
+            for family in ("NIFTY price / structure", "Momentum / volatility")
+            if family in mode.families and family in available
+        )
+        feature_sizes = {
+            family: len(features)
+            for family, features in FEATURE_FAMILIES
+        }
+        used_touchpoints = sum(feature_sizes[family] for family in decision_used)
+        available_requested = tuple(
+            family for family in mode.families if family in available
+        )
+        missing = tuple(
+            family for family in mode.families if family not in available
+        )
+        return FeatureCoverageAudit(
+            requested_touchpoints=mode.feature_count,
+            decision_used_touchpoints=used_touchpoints,
+            requested_families=mode.families,
+            available_families=available_requested,
+            decision_used_families=decision_used,
+            missing_families=missing,
+            stored_rows=tuple(sorted(counts.items())),
+        )
+
     def run_shadow_replay_with_visuals(
         self,
         config: ShadowReplayConfig,
     ) -> tuple[ShadowArenaReport, tuple[Candle, ...]]:
-        """Run the parallel Shadow Arena and return selected candles for playback."""
+        """Run frozen-engine Shadow Arena and return selected candles for playback."""
 
         config = validate_replay_config(config)
         sessions = config.total_sessions
         candles = self.load_shadow_replay_candles(sessions)
-        report = run_shadow_arena(candles, config)
         selected_dates = sorted({
             candle.at.astimezone(INDIA_TIME).date()
             for candle in candles
@@ -377,6 +465,32 @@ class DesktopDataService:
             for candle in sorted(candles, key=lambda item: item.at)
             if candle.at.astimezone(INDIA_TIME).date() in selected_set
         )
+        if not selected:
+            raise ValueError("Shadow Trader historical candles unavailable")
+
+        coverage = self._shadow_feature_coverage(
+            selected[0].at,
+            selected[-1].at,
+            config.mode_key,
+        )
+        report = run_shadow_arena(
+            selected,
+            config,
+            feature_coverage=coverage,
+        )
+
+        with SQLiteStore(self.database_path) as store:
+            previously_reviewed = store.has_reviewed_blind_window(
+                report.blind_window_id
+            )
+            if not previously_reviewed:
+                store.mark_blind_window_reviewed(
+                    report.blind_window_id,
+                    report.blind_start,
+                    report.blind_end,
+                )
+        if previously_reviewed:
+            report = replace(report, blind_previously_reviewed=True)
         return report, selected
 
     def analyze_time_range(

@@ -153,11 +153,29 @@ def _arena_report():
     trader = SimpleNamespace(
         timeframe_minutes=1,
         trader_label="1M SCALPER",
+        engine_id="engine1234567890",
         selected_strategy_name="Synthetic Strategy",
         blind_metrics=metrics,
         blind_paper=paper,
         trades=(trade,),
         rejected_signals=(),
+    )
+    coverage = SimpleNamespace(
+        requested_touchpoints=30,
+        decision_used_touchpoints=10,
+        requested_families=(
+            "NIFTY price / structure",
+            "Momentum / volatility",
+            "Futures",
+        ),
+        available_families=(
+            "NIFTY price / structure",
+            "Momentum / volatility",
+        ),
+        decision_used_families=(
+            "NIFTY price / structure",
+            "Momentum / volatility",
+        ),
     )
     return SimpleNamespace(
         config=config,
@@ -165,6 +183,10 @@ def _arena_report():
         total_sessions=30,
         first_session="2026-07-01",
         last_session="2026-08-15",
+        blind_start="2026-08-01",
+        blind_end="2026-08-15",
+        blind_previously_reviewed=False,
+        feature_coverage=coverage,
         trader_reports=(trader,),
     )
 
@@ -205,7 +227,7 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
 
     page.begin_visual_playback(candles, report)
     page._playback_timer.stop()
-    page.live_speed.setCurrentIndex(page.live_speed.findData(500))
+    page.live_speed.setCurrentIndex(page.live_speed.findData(10))
 
     page._playback_tick()
     app.processEvents()
@@ -220,7 +242,8 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
     assert page.live_tape.item(row, 7).text() == "hidden"
     assert page.live_tape.item(row, 8).text() == "ACTIVE"
 
-    page._playback_tick()
+    for _ in range(30):
+        page._playback_tick()
     app.processEvents()
 
     assert page.live_tape.rowCount() >= 2
@@ -240,9 +263,9 @@ def test_shadow_arena_has_speed_skip_and_on_demand_chart(monkeypatch) -> None:
     app.processEvents()
 
     assert [page.live_speed.itemText(i) for i in range(page.live_speed.count())] == [
-        "100x", "500x", "1000x", "MAX"
+        "5 sec / day", "10 sec / day", "20 sec / day", "MAX"
     ]
-    assert page.live_speed.currentData() == 500
+    assert page.live_speed.currentData() == 10
     assert page.live_skip_button.text() == "Skip to Results"
     assert page.live_chart_button.text() == "Open Chart"
     assert page.live_chart.isHidden()

@@ -72,6 +72,7 @@ class ShadowTraderPage(QWidget):
         self._playback_open: dict[int, list[tuple[object, datetime]]] = {}
         self._playback_tape_rows: list[list[object]] = []
         self._playback_session_dates = ()
+        self._playback_session_bounds: dict[object, tuple[int, int]] = {}
         self._playback_phase = None
         self._arena_runtime: dict[int, dict[str, object]] = {}
 
@@ -320,11 +321,19 @@ class ShadowTraderPage(QWidget):
         self.live_status.setWordWrap(True)
         row.addWidget(self.live_status, 1)
 
-        row.addWidget(QLabel("Speed"))
+        row.addWidget(QLabel("Day pace"))
         self.live_speed = QComboBox()
-        for label, speed in (("100x", 100), ("500x", 500), ("1000x", 1000), ("MAX", 5000)):
-            self.live_speed.addItem(label, speed)
-        self.live_speed.setCurrentIndex(self.live_speed.findData(500))
+        for label, seconds_per_day in (
+            ("5 sec / day", 5),
+            ("10 sec / day", 10),
+            ("20 sec / day", 20),
+            ("MAX", 0),
+        ):
+            self.live_speed.addItem(label, seconds_per_day)
+        self.live_speed.setCurrentIndex(self.live_speed.findData(10))
+        self.live_speed.setToolTip(
+            "Visual pacing only. Every historical candle and event is still processed in timestamp order."
+        )
         row.addWidget(self.live_speed)
 
         self.live_pause_button = QPushButton("Ⅱ  Pause")
@@ -442,6 +451,10 @@ class ShadowTraderPage(QWidget):
         self.results_dev_metric = MetricCard("DEVELOPMENT")
         self.results_blind_metric = MetricCard("BLIND")
         self.results_capital_metric = MetricCard("STARTING CAPITAL / TRADER")
+        self.results_blind_status_metric = MetricCard("BLIND STATUS")
+        self.results_touchpoints_metric = MetricCard("TOUCHPOINTS USED")
+        self.results_available_metric = MetricCard("AVAILABLE FAMILIES")
+        self.results_engines_metric = MetricCard("FROZEN ENGINES")
         root.addWidget(
             ResponsiveMetricGrid(
                 [
@@ -449,15 +462,26 @@ class ShadowTraderPage(QWidget):
                     self.results_dev_metric,
                     self.results_blind_metric,
                     self.results_capital_metric,
+                    self.results_blind_status_metric,
+                    self.results_touchpoints_metric,
+                    self.results_available_metric,
+                    self.results_engines_metric,
                 ],
                 compact_height=78,
             )
         )
 
+        coverage = Card("FEATURE COVERAGE AUDIT")
+        self.results_coverage = DataTable(
+            ["Family", "Requested", "Historically Available", "Used by Frozen Engine"]
+        )
+        coverage.add_widget(self.results_coverage)
+        root.addWidget(coverage)
+
         tournament = Card("TIMEFRAME TOURNAMENT — BLIND PHASE")
         self.results_tournament = DataTable(
             [
-                "Trader", "Frozen Strategy", "Trades", "Wins", "Losses", "Win Rate",
+                "Trader", "Engine ID", "Frozen Strategy", "Trades", "Wins", "Losses", "Win Rate",
                 "Avg Net 30m", "Profit Factor", "Start", "End", "Net P&L", "Return", "Max DD",
             ]
         )
@@ -657,14 +681,44 @@ class ShadowTraderPage(QWidget):
     def set_replay_report(self, report, *, open_results: bool = True) -> None:
         config = report.config
         self._latest_config = config
+        blind_label = (
+            "REUSED BLIND WINDOW — diagnostic only"
+            if report.blind_previously_reviewed
+            else "FRESH BLIND WINDOW"
+        )
         self.results_summary.setText(
             f"{report.actual_sessions} sessions completed: {config.development_sessions} development + "
-            f"{config.blind_sessions} blind. {len(report.trader_reports)} timeframe traders were tested independently."
+            f"{config.blind_sessions} blind. {len(report.trader_reports)} independently frozen timeframe engines. "
+            f"{blind_label}: {report.blind_start} → {report.blind_end}."
         )
         self.results_total_metric.set_value(str(report.actual_sessions))
         self.results_dev_metric.set_value(str(config.development_sessions))
         self.results_blind_metric.set_value(str(config.blind_sessions))
         self.results_capital_metric.set_value(self._fmt_money(config.starting_capital))
+        self.results_blind_status_metric.set_value(
+            "REUSED / NOT FRESH"
+            if report.blind_previously_reviewed
+            else "FRESH"
+        )
+        coverage = report.feature_coverage
+        self.results_touchpoints_metric.set_value(
+            f"{coverage.decision_used_touchpoints} / {coverage.requested_touchpoints}"
+        )
+        self.results_available_metric.set_value(
+            f"{len(coverage.available_families)} / {len(coverage.requested_families)}"
+        )
+        self.results_engines_metric.set_value(str(len(report.trader_reports)))
+        self.results_coverage.set_rows(
+            [
+                [
+                    family,
+                    "YES",
+                    "YES" if family in coverage.available_families else "NO",
+                    "YES" if family in coverage.decision_used_families else "NO",
+                ]
+                for family in coverage.requested_families
+            ]
+        )
 
         tournament_rows = []
         trade_rows = []
@@ -675,6 +729,7 @@ class ShadowTraderPage(QWidget):
             tournament_rows.append(
                 [
                     trader.trader_label,
+                    trader.engine_id,
                     trader.selected_strategy_name or "None",
                     metrics.trades,
                     metrics.wins,
@@ -740,6 +795,18 @@ class ShadowTraderPage(QWidget):
         self._playback_open = {timeframe: [] for timeframe in DEFAULT_TRADER_TIMEFRAMES}
         self._playback_tape_rows = []
         self._playback_session_dates = tuple(sorted({candle.at.date() for candle in self._playback_candles}))
+        self._playback_session_bounds = {}
+        for session_day in self._playback_session_dates:
+            indices = [
+                index
+                for index, candle in enumerate(self._playback_candles)
+                if candle.at.date() == session_day
+            ]
+            if indices:
+                self._playback_session_bounds[session_day] = (
+                    indices[0],
+                    indices[-1] + 1,
+                )
         self._playback_phase = None
         self._arena_runtime = {}
         for timeframe in DEFAULT_TRADER_TIMEFRAMES:
@@ -768,11 +835,29 @@ class ShadowTraderPage(QWidget):
         )
         self._playback_timer.start()
 
-    def _playback_speed(self) -> int:
+    def _playback_step_size(self) -> int:
+        """Return candles per UI tick for the selected seconds-per-day pace."""
+
         try:
-            return max(1, int(self.live_speed.currentData()))
+            seconds_per_day = int(self.live_speed.currentData())
         except (TypeError, ValueError):
-            return 500
+            seconds_per_day = 10
+        if seconds_per_day <= 0:
+            return 100000
+
+        if not self._playback_candles or self._playback_index >= len(self._playback_candles):
+            return 1
+        day = self._playback_candles[self._playback_index].at.date()
+        bounds = self._playback_session_bounds.get(day)
+        if bounds is None:
+            session_count = 375
+        else:
+            session_count = max(1, bounds[1] - bounds[0])
+        ticks_per_day = max(
+            1,
+            round(seconds_per_day * 1000 / self._playback_timer.interval()),
+        )
+        return max(1, (session_count + ticks_per_day - 1) // ticks_per_day)
 
     def _phase_for_session(self, session_number: int) -> str:
         if self._playback_report is None:
@@ -891,8 +976,13 @@ class ShadowTraderPage(QWidget):
             self._finish_playback()
             return
 
-        candles_per_tick = max(1, int(self._playback_speed() * self._playback_timer.interval() / 1000))
+        candles_per_tick = self._playback_step_size()
         next_index = min(len(self._playback_candles), self._playback_index + candles_per_tick)
+        if self._playback_index < len(self._playback_candles):
+            current_day = self._playback_candles[self._playback_index].at.date()
+            bounds = self._playback_session_bounds.get(current_day)
+            if bounds is not None:
+                next_index = min(next_index, bounds[1])
         current = self._playback_candles[next_index - 1]
         self._playback_index = next_index
 

@@ -53,10 +53,13 @@ def test_shadow_arena_runs_four_independent_timeframes() -> None:
 
     report = run_shadow_arena(_sessions(12), config)
 
-    assert report.schema == "intrader-shadow-arena-v1"
+    assert report.schema == "intrader-shadow-arena-v2-frozen-engine"
     assert report.total_sessions == 12
     assert report.actual_sessions == 12
     assert [item.timeframe_minutes for item in report.trader_reports] == [1, 5, 10, 15]
+    assert all(item.engine_id for item in report.trader_reports)
+    assert report.blind_start <= report.blind_end
+    assert len(report.blind_window_id) == 16
     assert all(
         item.blind_paper.starting_capital == Decimal("50000")
         for item in report.trader_reports

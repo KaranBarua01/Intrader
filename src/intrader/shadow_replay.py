@@ -209,37 +209,92 @@ def _candidate(performance: StrategyPerformance) -> ReplayCandidate:
     )
 
 
+def _selection_stats(
+    performance: StrategyPerformance,
+) -> tuple[int, Decimal, Decimal, Decimal]:
+    """Return stability, profit factor, drawdown and average return for training only."""
+
+    returns = [
+        item.return_30m
+        for item in performance.occurrences
+        if item.return_30m is not None
+    ]
+    if not returns:
+        return 0, D(0), D("999"), D("-999")
+
+    positives = sum((value for value in returns if value > 0), D(0))
+    negatives = abs(sum((value for value in returns if value < 0), D(0)))
+    profit_factor = (
+        D("999") if negatives == 0 and positives > 0
+        else D(0) if negatives == 0
+        else positives / negatives
+    )
+
+    cumulative = D(0)
+    peak = D(0)
+    max_drawdown = D(0)
+    for value in returns:
+        cumulative += value
+        peak = max(peak, cumulative)
+        max_drawdown = max(max_drawdown, peak - cumulative)
+
+    # Require the training edge to appear across the sample instead of winning
+    # only because of one cluster. These thirds use development outcomes only.
+    segment_means: list[Decimal] = []
+    for part in range(3):
+        start = len(returns) * part // 3
+        end = len(returns) * (part + 1) // 3
+        segment = returns[start:end]
+        if segment:
+            segment_means.append(sum(segment, D(0)) / D(len(segment)))
+    positive_segments = sum(1 for value in segment_means if value > 0)
+    average = sum(returns, D(0)) / D(len(returns))
+    return positive_segments, profit_factor, max_drawdown, average
+
+
 def _pick_strategy(
     snapshot: StrategyLabSnapshot,
     development_sessions: int,
 ) -> StrategyPerformance | None:
-    minimum_signals = max(5, development_sessions // 4)
-    eligible = [
-        item
-        for item in snapshot.strategies
-        if item.definition.direction_scope != "PROCESS"
-        and item.avg_return_30m is not None
-        and item.signals >= minimum_signals
+    """Choose a development-only strategy with sample/stability protection."""
+
+    minimum_signals = max(8, development_sessions // 4)
+    scored: list[
+        tuple[StrategyPerformance, int, Decimal, Decimal, Decimal]
+    ] = []
+    for item in snapshot.strategies:
+        if (
+            item.definition.direction_scope == "PROCESS"
+            or item.avg_return_30m is None
+            or item.signals < minimum_signals
+        ):
+            continue
+        stability, profit_factor, drawdown, average = _selection_stats(item)
+        if average <= 0:
+            continue
+        scored.append((item, stability, profit_factor, drawdown, average))
+
+    # First preference: positive expectancy, PF > 1 and positive results in
+    # at least two thirds of the development sample.
+    robust = [
+        row for row in scored
+        if row[1] >= 2 and row[2] > 1
     ]
-    if not eligible:
-        eligible = [
-            item
-            for item in snapshot.strategies
-            if item.definition.direction_scope != "PROCESS"
-            and item.avg_return_30m is not None
-            and item.signals > 0
-        ]
-    if not eligible:
+    pool = robust or scored
+    if not pool:
         return None
-    return max(
-        eligible,
-        key=lambda item: (
-            item.avg_return_30m,
-            item.hit_rate_30m if item.hit_rate_30m is not None else D("-999"),
-            item.signals,
-            item.definition.strategy_id,
+
+    chosen = max(
+        pool,
+        key=lambda row: (
+            row[1],
+            row[4] / (D(1) + row[3]),
+            row[2],
+            row[0].signals,
+            row[0].definition.strategy_id,
         ),
     )
+    return chosen[0]
 
 
 def _performance_by_id(
@@ -435,7 +490,7 @@ def run_candle_proxy_replay(
         last_session=dates[-1].isoformat() if dates else None,
         notes=(
             "Version 2 is a NIFTY candle-direction proxy, not exact historical option P&L.",
-            "The selected strategy is chosen only from the development segment and frozen for the blind segment.",
+            "The selected strategy is chosen only from the development segment, must pass sample/stability checks when possible, and is frozen for the blind segment.",
             "Forward 5/15/30-minute returns are evaluation outputs and are never available to the strategy at decision time.",
             "Profit factor and drawdown currently use signed underlying percentage returns, not rupee option P&L.",
             "Replay mode records the requested touchpoint profile. Extra market families are added as their historical feeds are integrated.",

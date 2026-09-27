@@ -8,6 +8,7 @@ with independent proxy paper accounts and no look-ahead.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Sequence
@@ -87,6 +88,9 @@ class RejectedArenaSignal:
 class ArenaTraderReport:
     timeframe_minutes: int
     trader_label: str
+    engine_id: str
+    training_start: str
+    training_end: str
     selected_strategy_id: str | None
     selected_strategy_name: str | None
     development_metrics: ArenaMetrics
@@ -98,6 +102,17 @@ class ArenaTraderReport:
 
 
 @dataclass(frozen=True, slots=True)
+class FeatureCoverageAudit:
+    requested_touchpoints: int
+    decision_used_touchpoints: int
+    requested_families: tuple[str, ...]
+    available_families: tuple[str, ...]
+    decision_used_families: tuple[str, ...]
+    missing_families: tuple[str, ...]
+    stored_rows: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ShadowArenaReport:
     schema: str
     config: ShadowReplayConfig
@@ -105,6 +120,11 @@ class ShadowArenaReport:
     actual_sessions: int
     first_session: str | None
     last_session: str | None
+    blind_start: str
+    blind_end: str
+    blind_window_id: str
+    blind_previously_reviewed: bool
+    feature_coverage: FeatureCoverageAudit
     trader_reports: tuple[ArenaTraderReport, ...]
     notes: tuple[str, ...]
 
@@ -312,6 +332,12 @@ def _build_trader(
     config: ShadowReplayConfig,
 ) -> ArenaTraderReport:
     aggregated = _aggregate_candles(candles, timeframe_minutes)
+    dates = sorted({
+        candle.at.astimezone(INDIA_TIME).date()
+        for candle in aggregated
+    })
+    training_start = dates[0].isoformat()
+    training_end = dates[config.development_sessions - 1].isoformat()
     base = run_candle_proxy_replay(
         aggregated,
         development_sessions=config.development_sessions,
@@ -335,9 +361,22 @@ def _build_trader(
         strategy_name=strategy_name,
         config=config,
     )
+    signature = "|".join(
+        (
+            str(timeframe_minutes),
+            base.selected_strategy_id or "NONE",
+            training_start,
+            training_end,
+            config.mode_key,
+        )
+    )
+    engine_id = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
     return ArenaTraderReport(
         timeframe_minutes=timeframe_minutes,
         trader_label=TRADER_LABELS[timeframe_minutes],
+        engine_id=engine_id,
+        training_start=training_start,
+        training_end=training_end,
         selected_strategy_id=base.selected_strategy_id,
         selected_strategy_name=base.selected_strategy_name,
         development_metrics=_metrics(
@@ -354,6 +393,9 @@ def _build_trader(
 def run_shadow_arena(
     candles: Sequence[Candle],
     config: ShadowReplayConfig,
+    *,
+    blind_previously_reviewed: bool = False,
+    feature_coverage: FeatureCoverageAudit | None = None,
 ) -> ShadowArenaReport:
     config = validate_replay_config(config)
     ordered = tuple(sorted(candles, key=lambda item: item.at))
@@ -379,19 +421,41 @@ def run_shadow_arena(
         )
         for timeframe in config.trader_timeframes
     )
+    blind_dates = selected_dates[config.development_sessions:]
+    blind_start = blind_dates[0].isoformat()
+    blind_end = blind_dates[-1].isoformat()
+    blind_window_id = hashlib.sha256(
+        f"{blind_start}|{blind_end}".encode("utf-8")
+    ).hexdigest()[:16]
+    if feature_coverage is None:
+        feature_coverage = FeatureCoverageAudit(
+            requested_touchpoints=0,
+            decision_used_touchpoints=0,
+            requested_families=(),
+            available_families=(),
+            decision_used_families=(),
+            missing_families=(),
+            stored_rows=(),
+        )
     return ShadowArenaReport(
-        schema="intrader-shadow-arena-v1",
+        schema="intrader-shadow-arena-v2-frozen-engine",
         config=config,
         total_sessions=config.total_sessions,
         actual_sessions=len(selected_dates),
         first_session=selected_dates[0].isoformat(),
         last_session=selected_dates[-1].isoformat(),
+        blind_start=blind_start,
+        blind_end=blind_end,
+        blind_window_id=blind_window_id,
+        blind_previously_reviewed=blind_previously_reviewed,
+        feature_coverage=feature_coverage,
         trader_reports=trader_reports,
         notes=(
-            "Each timeframe trader selects its strategy only from the development block, then freezes it for blind testing.",
+            "Each timeframe trader is trained only on the development block, reduced to a frozen engine ID/strategy, then blind candles are evaluated without retuning.",
             "The four paper accounts are independent and reset to the same starting capital at the beginning of the blind phase.",
             "Only one 30-minute proxy position may be open per timeframe trader; overlapping signals are recorded as rejected.",
             "Paper P&L is a NIFTY directional proxy with user-configured friction, not exact historical option premium P&L.",
+            "A previously reviewed blind date window is no longer considered fresh validation for later engine versions.",
             "No broker order path is present in Shadow Arena.",
         ),
     )

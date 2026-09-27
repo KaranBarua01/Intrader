@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from intrader.historical import Candle, OIObservation
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class StorageError(Exception):
@@ -341,6 +341,13 @@ class SQLiteStore:
                 BEGIN
                     SELECT RAISE(ABORT, 'reason audits are immutable');
                 END;
+
+                CREATE TABLE IF NOT EXISTS shadow_blind_windows (
+                    blind_window_id TEXT PRIMARY KEY,
+                    blind_start TEXT NOT NULL,
+                    blind_end TEXT NOT NULL,
+                    first_reviewed_at_utc TEXT NOT NULL
+                );
                 """
             )
             self._connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -502,6 +509,52 @@ class SQLiteStore:
             start=start,
             end=end,
         )
+
+    def has_reviewed_blind_window(self, blind_window_id: str) -> bool:
+        if not blind_window_id:
+            raise StorageError("blind window id required")
+        try:
+            row = self._connection.execute(
+                "SELECT 1 FROM shadow_blind_windows WHERE blind_window_id = ?",
+                (blind_window_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            raise StorageError("SQLite blind-window read failed") from None
+        return row is not None
+
+    def mark_blind_window_reviewed(
+        self,
+        blind_window_id: str,
+        blind_start: str,
+        blind_end: str,
+        *,
+        reviewed_at: datetime | None = None,
+    ) -> bool:
+        if not blind_window_id or not blind_start or not blind_end:
+            raise StorageError("blind window metadata incomplete")
+        if blind_start > blind_end:
+            raise StorageError("blind window range invalid")
+        from datetime import timezone
+
+        reviewed_at = reviewed_at or datetime.now(timezone.utc)
+        try:
+            with self._connection:
+                cursor = self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO shadow_blind_windows (
+                        blind_window_id, blind_start, blind_end, first_reviewed_at_utc
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        blind_window_id,
+                        blind_start,
+                        blind_end,
+                        _utc_iso(reviewed_at),
+                    ),
+                )
+        except sqlite3.Error:
+            raise StorageError("SQLite blind-window write failed") from None
+        return cursor.rowcount == 1
 
     def count_time_range_rows(
         self,

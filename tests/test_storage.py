@@ -57,7 +57,7 @@ def test_schema_initializes_twice_with_wal_and_reopens(tmp_path) -> None:
     store.initialize()
 
     assert store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 9
     store.store_candles(_bundle().spot, "ONE_MINUTE", [_candle()])
     store.close()
 
@@ -506,3 +506,21 @@ def test_count_time_range_rows_does_not_require_snapshot_token(tmp_path) -> None
             start=NOW,
             end=NOW + timedelta(minutes=1),
         ) == 1
+
+
+def test_blind_window_registry_marks_reviewed_range_once(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "intrader.db") as store:
+        assert store.has_reviewed_blind_window("blind-1") is False
+        assert store.mark_blind_window_reviewed(
+            "blind-1",
+            "2026-08-01",
+            "2026-08-31",
+            reviewed_at=NOW,
+        ) is True
+        assert store.has_reviewed_blind_window("blind-1") is True
+        assert store.mark_blind_window_reviewed(
+            "blind-1",
+            "2026-08-01",
+            "2026-08-31",
+            reviewed_at=NOW,
+        ) is False

@@ -23,6 +23,8 @@ from intrader.ui.theme import ACCENT_PRESETS, DEFAULT_ACCENT
 
 BULLISH_COLOR = "#2d8a60"
 BEARISH_COLOR = "#c64b4b"
+LOGO_RED = "#FF1018"
+LOGO_GREY = "#666666"
 TIMEFRAME_MINUTES = {
     "1m": 1,
     "3m": 3,
@@ -34,43 +36,55 @@ TIMEFRAME_MINUTES = {
 
 
 class LogoMark(QWidget):
-    """Vector Intrader mark inspired by the approved geometric N/candlestick logo."""
+    """Fixed-color Intrader logo. Accent customization never changes this mark."""
 
-    def __init__(
-        self,
-        accent: str = DEFAULT_ACCENT,
-        parent: QWidget | None = None,
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._accent = accent
-        self.setFixedSize(52, 52)
-
-    def set_accent(self, accent: str) -> None:
-        self._accent = accent
-        self.update()
+        self.setFixedSize(56, 52)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx = self.width() / 2
-        cy = self.height() / 2
 
-        painter.setPen(QPen(QColor("#D7D4CD"), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(QPointF(cx, cy), 22, 22)
+        red = QColor(LOGO_RED)
+        grey = QColor(LOGO_GREY)
+        white = QColor("#FFFFFF")
 
+        # Left rounded vertical element.
+        left_body = QRectF(5.5, 12.5, 10.5, 31.5)
+        painter.setPen(QPen(grey, 3.2))
+        painter.setBrush(white)
+        painter.drawRoundedRect(left_body, 5.2, 5.2)
+
+        # Fixed red upward triangle above the left element.
+        triangle = QPainterPath(QPointF(10.75, 4.0))
+        triangle.lineTo(QPointF(5.1, 11.0))
+        triangle.lineTo(QPointF(16.4, 11.0))
+        triangle.closeSubpath()
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self._accent))
-        painter.drawRect(QRectF(5, cy - 4, 42, 8))
+        painter.setBrush(red)
+        painter.drawPath(triangle)
 
-        painter.setPen(QPen(QColor("#111318"), 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
-        painter.drawLine(QPointF(15, 12), QPointF(15, 40))
-        painter.drawLine(QPointF(15, 13), QPointF(37, 39))
-        painter.drawLine(QPointF(37, 12), QPointF(37, 40))
+        # Left red vertical stem.
+        painter.setPen(
+            QPen(red, 3.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap)
+        )
+        painter.drawLine(QPointF(21.0, 4.0), QPointF(21.0, 45.5))
 
-        painter.setPen(QPen(QColor("#BBB7AF"), 1))
-        painter.drawLine(QPointF(cx, 4), QPointF(cx, 48))
-        painter.drawLine(QPointF(4, cy), QPointF(48, cy))
+        # Two rising diagonals forming the geometric N.
+        painter.drawLine(QPointF(21.0, 36.8), QPointF(42.0, 12.5))
+        painter.drawLine(QPointF(21.0, 45.0), QPointF(42.0, 21.0))
+
+        # Right candlestick wick.
+        painter.drawLine(QPointF(44.5, 4.0), QPointF(44.5, 45.5))
+
+        # Right candlestick body: white fill, grey outline.
+        right_body = QRectF(40.5, 10.2, 9.5, 27.0)
+        painter.setPen(QPen(grey, 3.0))
+        painter.setBrush(white)
+        painter.drawRect(right_body)
+
+
 
 
 class BrandLockup(QWidget):
@@ -78,14 +92,13 @@ class BrandLockup(QWidget):
 
     def __init__(
         self,
-        accent: str = DEFAULT_ACCENT,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        self.mark = LogoMark(accent)
+        self.mark = LogoMark()
         layout.addWidget(self.mark)
         text = QWidget()
         text_layout = QVBoxLayout(text)

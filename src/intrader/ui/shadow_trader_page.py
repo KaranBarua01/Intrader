@@ -190,6 +190,26 @@ class ShadowTraderPage(QWidget):
         self.historical_progress.setFormat("%v / %m trading sessions")
         root.addWidget(self.historical_progress)
 
+        self.replay_strategy_metric = MetricCard("FROZEN STRATEGY")
+        self.replay_strategy_metric.set_value("—")
+        self.replay_win_metric = MetricCard("BLIND WIN RATE")
+        self.replay_win_metric.set_value("—")
+        self.replay_expectancy_metric = MetricCard("BLIND AVG 30M RETURN")
+        self.replay_expectancy_metric.set_value("—")
+        self.replay_signal_metric = MetricCard("BLIND SIGNALS")
+        self.replay_signal_metric.set_value("—")
+        root.addWidget(
+            ResponsiveMetricGrid(
+                [
+                    self.replay_strategy_metric,
+                    self.replay_win_metric,
+                    self.replay_expectancy_metric,
+                    self.replay_signal_metric,
+                ],
+                compact_height=78,
+            )
+        )
+
         integrity = Card("REPLAY INTEGRITY")
         integrity_text = QLabel(
             "No look-ahead: future candles, future news, end-of-day highs/lows, future "
@@ -384,6 +404,21 @@ class ShadowTraderPage(QWidget):
         self.historical_progress.setValue(completed)
         self.historical_progress.setFormat("%v / %m trading sessions")
         self.replay_status.setText(status)
+
+    def set_replay_report(self, report) -> None:
+        strategy = report.selected_strategy_name or "None"
+        self.replay_strategy_metric.set_value(strategy)
+        self.replay_win_metric.set_value(
+            "N/A"
+            if report.blind.win_rate_pct is None
+            else f"{report.blind.win_rate_pct:.2f}%"
+        )
+        self.replay_expectancy_metric.set_value(
+            "N/A"
+            if report.blind.average_return_30m_pct is None
+            else f"{report.blind.average_return_30m_pct:.4f}%"
+        )
+        self.replay_signal_metric.set_value(str(report.blind.evaluable_signals))
 
     def set_replay_finished(self, status: str) -> None:
         self._replay_running = False

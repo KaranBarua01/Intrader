@@ -57,7 +57,7 @@ class OpeningScenarioPanel(QWidget):
 
         metric_row = QHBoxLayout()
         metric_row.setSpacing(8)
-        self._metric_cards: dict[str, tuple[MetricCard, QProgressBar]] = {}
+        self._metric_cards: dict[str, tuple[MetricCard, QProgressBar, QProgressBar | None]] = {}
         for key, label in (
             ("bullish", "BULLISH OPEN WEIGHT"),
             ("balanced", "BALANCED OPEN WEIGHT"),
@@ -70,7 +70,7 @@ class OpeningScenarioPanel(QWidget):
             bar.setTextVisible(False)
             card.layout_box.addWidget(bar)
             metric_row.addWidget(card, 1)
-            self._metric_cards[key] = (card, bar)
+            self._metric_cards[key] = (card, bar, None)
         root.addLayout(metric_row)
 
         detail = Card()
@@ -107,7 +107,8 @@ class OpeningScenarioPanel(QWidget):
             left_layout.addWidget(QLabel(label), row, 1)
             left_layout.addWidget(bar, row, 2)
             self._detail_values[key] = value
-            self._metric_cards[key] = (self._metric_cards[key][0], bar)
+            card, top_bar, _detail = self._metric_cards[key]
+            self._metric_cards[key] = (card, top_bar, bar)
         body.addWidget(left, 1)
 
         self.drivers = QLabel("No opening evidence available for this selection.")
@@ -129,7 +130,7 @@ class OpeningScenarioPanel(QWidget):
 
     def _set_metric(self, key: str, value, tone: str = "neutral") -> None:
         numeric = max(0.0, min(100.0, float(value)))
-        card, detail_bar = self._metric_cards[key]
+        card, top_bar, detail_bar = self._metric_cards[key]
         card.set_value(
             f"{numeric:.0f}%",
             "positive" if tone == "positive" else "negative" if tone == "negative" else "neutral",
@@ -141,7 +142,9 @@ class OpeningScenarioPanel(QWidget):
             if tone == "negative"
             else "#6E7880"
         )
-        for bar in (detail_bar,):
+        for bar in (top_bar, detail_bar):
+            if bar is None:
+                continue
             bar.setValue(round(numeric * 10))
             bar.setStyleSheet(
                 "QProgressBar{background:#ECE9E3;border:none;border-radius:4px;"
@@ -747,25 +750,11 @@ class TimeTravelPage(QWidget):
 
     def apply_layout_preset(self, preset: str) -> None:
         width = max(1, self.width())
-        if preset == "Analysis":
-            self.range_splitter.setSizes([int(width * 0.78), int(width * 0.22)])
-            self.replay_splitter.setSizes([int(width * 0.78), int(width * 0.22)])
-            self.detail_tabs.setMinimumHeight(150)
-            self.replay_details.setMaximumHeight(140)
-        elif preset == "Monitoring":
+        if self.range_splitter.orientation() == Qt.Orientation.Horizontal:
             self.range_splitter.setSizes([int(width * 0.58), int(width * 0.42)])
-            self.replay_splitter.setSizes([int(width * 0.62), int(width * 0.38)])
-            self.detail_tabs.setMinimumHeight(190)
-        elif preset == "Compact":
-            self.range_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
-            self.replay_splitter.setSizes([int(width * 0.72), int(width * 0.28)])
-            self.detail_tabs.setMinimumHeight(160)
-            self.replay_details.setMaximumHeight(130)
-        else:
-            self.range_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
-            self.replay_splitter.setSizes([int(width * 0.68), int(width * 0.32)])
-            self.detail_tabs.setMinimumHeight(190)
-            self.replay_details.setMaximumHeight(190)
+            self.replay_splitter.setSizes([int(width * 0.70), int(width * 0.30)])
+        self.detail_tabs.setMinimumHeight(190)
+        self.replay_details.setMaximumHeight(170)
 
     def _mark_range_stale(self) -> None:
         if hasattr(self, "range_state"):

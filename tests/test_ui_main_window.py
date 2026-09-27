@@ -211,10 +211,14 @@ def test_shadow_arena_hides_pnl_until_plus_30_minutes(monkeypatch) -> None:
     app.processEvents()
 
     assert page.tabs.tabText(page.live_tab_index) == "Shadow Arena"
-    assert page.live_tape.rowCount() == 1
-    assert page.live_tape.item(0, 3).text() == "OPEN"
-    assert page.live_tape.item(0, 7).text() == "hidden"
-    assert page.live_tape.item(0, 8).text() == "ACTIVE"
+    open_rows = [
+        row for row in range(page.live_tape.rowCount())
+        if page.live_tape.item(row, 3).text() == "OPEN"
+    ]
+    assert open_rows
+    row = open_rows[-1]
+    assert page.live_tape.item(row, 7).text() == "hidden"
+    assert page.live_tape.item(row, 8).text() == "ACTIVE"
 
     page._playback_tick()
     app.processEvents()

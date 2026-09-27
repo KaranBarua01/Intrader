@@ -1,15 +1,10 @@
-"""Tests for the parallel Shadow Arena paper-trader engine."""
+"""Tests for Intrader 0.5 event-driven Shadow Arena."""
 
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 
 from intrader.historical import Candle, INDIA_TIME
-from intrader.shadow_arena import (
-    _paperize_phase,
-    _select_non_overlapping,
-    run_shadow_arena,
-)
+from intrader.shadow_arena import run_shadow_arena
 from intrader.shadow_lab import ShadowReplayConfig
 
 
@@ -24,7 +19,9 @@ def _sessions(count: int) -> tuple[Candle, ...]:
             for minute in range(90):
                 wave = Decimal((minute % 12) - 6)
                 open_ = base + wave
-                close = open_ + (Decimal("3") if minute % 4 < 2 else Decimal("-3"))
+                close = open_ + (
+                    Decimal("3") if minute % 4 < 2 else Decimal("-3")
+                )
                 rows.append(
                     Candle(
                         at=start + timedelta(minutes=minute),
@@ -40,7 +37,7 @@ def _sessions(count: int) -> tuple[Candle, ...]:
     return tuple(rows)
 
 
-def test_shadow_arena_runs_four_independent_timeframes() -> None:
+def test_shadow_arena_builds_four_frozen_event_driven_engines() -> None:
     config = ShadowReplayConfig(
         development_sessions=8,
         blind_sessions=4,
@@ -53,10 +50,15 @@ def test_shadow_arena_runs_four_independent_timeframes() -> None:
 
     report = run_shadow_arena(_sessions(12), config)
 
-    assert report.schema == "intrader-shadow-arena-v2-frozen-engine"
+    assert report.schema == "intrader-shadow-arena-v3-event-driven"
     assert report.total_sessions == 12
     assert report.actual_sessions == 12
-    assert [item.timeframe_minutes for item in report.trader_reports] == [1, 5, 10, 15]
+    assert [item.timeframe_minutes for item in report.trader_reports] == [
+        1, 5, 10, 15
+    ]
+    assert [item.hold_minutes for item in report.trader_reports] == [
+        10, 30, 45, 60
+    ]
     assert all(item.engine_id for item in report.trader_reports)
     assert report.blind_start <= report.blind_end
     assert len(report.blind_window_id) == 16
@@ -66,61 +68,38 @@ def test_shadow_arena_runs_four_independent_timeframes() -> None:
     )
 
 
-def test_overlapping_signals_are_rejected_per_timeframe() -> None:
-    at = datetime(2026, 8, 3, 10, 0, tzinfo=INDIA_TIME)
-    first = SimpleNamespace(
-        phase="BLIND",
-        at=at.isoformat(),
-        direction="CALL / LONG",
-    )
-    second = SimpleNamespace(
-        phase="BLIND",
-        at=(at + timedelta(minutes=5)).isoformat(),
-        direction="CALL / LONG",
-    )
-    third = SimpleNamespace(
-        phase="BLIND",
-        at=(at + timedelta(minutes=31)).isoformat(),
-        direction="PUT / SHORT",
-    )
-    report = SimpleNamespace(trades=(first, second, third))
-
-    accepted, rejected = _select_non_overlapping(report, 5)
-
-    assert accepted == (first, third)
-    assert len(rejected) == 1
-    assert rejected[0].reason == "position already open in this timeframe trader"
-
-
-def test_paper_money_applies_allocation_and_friction() -> None:
-    trade = SimpleNamespace(
-        phase="BLIND",
-        at="2026-08-03T10:00:00+05:30",
-        direction="CALL / LONG",
-        entry_underlying=Decimal("24000"),
-        approx_exit_underlying_30m=Decimal("24240"),
-        return_30m_pct=Decimal("1.0"),
-        regime=None,
-    )
+def test_shadow_arena_ablation_uses_same_blind_window() -> None:
     config = ShadowReplayConfig(
-        development_sessions=1,
-        blind_sessions=1,
-        starting_capital=Decimal("10000"),
-        allocation_pct=Decimal("50"),
-        friction_bps=Decimal("10"),
+        development_sessions=8,
+        blind_sessions=4,
+        mode_key="LOW",
         trader_timeframes=(5,),
     )
 
-    rows, account = _paperize_phase(
-        (trade,),
-        timeframe_minutes=5,
-        strategy_name="Synthetic",
-        config=config,
+    report = run_shadow_arena(_sessions(12), config)
+
+    assert report.ablation_results
+    assert {
+        item.timeframe_minutes for item in report.ablation_results
+    } == {5}
+    assert report.walk_forward_results == ()
+
+
+def test_walk_forward_produces_rolling_windows_when_enabled() -> None:
+    config = ShadowReplayConfig(
+        development_sessions=8,
+        blind_sessions=4,
+        mode_key="LOW",
+        validation_mode="WALK_FORWARD",
+        walk_train_sessions=6,
+        walk_test_sessions=2,
+        walk_step_sessions=2,
+        walk_windows=2,
+        trader_timeframes=(5,),
     )
 
-    # 10 bps = 0.10%, so net trade return = 0.90%.
-    # 50% of 10,000 = 5,000 allocated; P&L = 45.
-    assert rows[0].net_return_30m_pct == Decimal("0.9")
-    assert rows[0].paper_pnl == Decimal("45.000")
-    assert account.ending_capital == Decimal("10045.000")
-    assert account.net_pnl == Decimal("45.000")
+    report = run_shadow_arena(_sessions(12), config)
+
+    assert len(report.walk_forward_results) == 2
+    assert [row.window_index for row in report.walk_forward_results] == [1, 2]
+    assert all(row.test_start <= row.test_end for row in report.walk_forward_results)

@@ -280,6 +280,8 @@ class MainWindow(QMainWindow):
         if accent not in valid:
             accent = DEFAULT_ACCENT
         self.current_accent = accent
+        if hasattr(self, "accent_selector") and self.accent_selector.accent() != accent:
+            self.accent_selector.set_accent(accent, emit=False)
         self.setStyleSheet(build_stylesheet(accent))
         self.settings.setValue("accent", accent)
         for dots in self.findChildren(DotMatrix):

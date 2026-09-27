@@ -655,6 +655,12 @@ class DesktopDataService:
         """Run frozen-engine Shadow Arena and return selected candles for playback."""
 
         config = validate_replay_config(config)
+        if config.execution_mode == "OPTION_PREMIUM":
+            raise ValueError(
+                "Exact historical option-premium execution is not available yet. "
+                "The 0.5.0 adapter slot is reserved, but this run must use PROXY until "
+                "complete timestamped expired-option premiums are connected."
+            )
         sessions = config.required_sessions
         candles = self.load_shadow_replay_candles(sessions)
         selected_dates = sorted({
@@ -695,7 +701,15 @@ class DesktopDataService:
                 )
         if previously_reviewed:
             report = replace(report, blind_previously_reviewed=True)
-        return report, selected
+
+        playback = tuple(
+            candle
+            for candle in selected
+            if report.first_session
+            <= candle.at.astimezone(INDIA_TIME).date().isoformat()
+            <= report.last_session
+        )
+        return report, playback
 
     def analyze_time_range(
         self,

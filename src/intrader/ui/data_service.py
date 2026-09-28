@@ -608,15 +608,6 @@ class DesktopDataService:
                         ),
                     )
                 )
-                events.append(
-                    FeatureEvent(
-                        at=at,
-                        family="Options microstructure",
-                        score=score,
-                        label="Option-chain OI/volume confirmation",
-                    )
-                )
-
             # Scheduled event context is a risk gate, not a fabricated
             # directional prediction.
             scheduled = store.load_scheduled_events(start=start, end=end)
@@ -640,42 +631,77 @@ class DesktopDataService:
         timeline = HistoricalFeatureTimeline(events, risk_windows)
         event_families = set(timeline.families)
 
-        available = set()
-        if counts["candles"] > 0:
-            available.update(
-                ("NIFTY price / structure", "Momentum / volatility")
-            )
-        if counts["future_snapshots"] > 0:
-            available.add("Futures")
-        if counts["option_snapshots"] > 0:
-            available.update(("Options", "Options microstructure"))
-        if counts["breadth_snapshots"] > 0:
-            available.add("Breadth / constituents")
-        if counts["index_snapshots"] > 0 or counts["scheduled_events"] > 0:
-            available.add("Volatility / macro context")
-        if counts["news_items"] > 0 or counts["scheduled_events"] > 0:
-            available.add("News / regime / time")
+        family_features = {
+            family: tuple(features)
+            for family, features in FEATURE_FAMILIES
+        }
+        requested_features = {
+            feature
+            for family in mode.families
+            for feature in family_features[family]
+        }
 
+        available_features: set[str] = set()
+        used_features: set[str] = set()
+
+        if counts["candles"] > 0:
+            available_features.update(family_features["NIFTY price / structure"])
+            available_features.update(family_features["Momentum / volatility"])
+            used_features.update(("spot_return_1m", "roc5"))
+        if counts["future_snapshots"] > 0:
+            available_features.update(family_features["Futures"])
+            used_features.update(
+                ("future_oi_change", "future_order_flow_imbalance")
+            )
+        if counts["option_snapshots"] > 0:
+            available_features.update(family_features["Options"])
+            available_features.update(family_features["Options microstructure"])
+            used_features.update(
+                ("call_put_oi_ratio", "call_put_volume_ratio")
+            )
+        if counts["breadth_snapshots"] > 0:
+            available_features.add("nifty_advancers_ratio")
+            used_features.add("nifty_advancers_ratio")
+        if counts["index_snapshots"] > 0:
+            available_features.update(("india_vix_level", "india_vix_change"))
+        if counts["scheduled_events"] > 0:
+            available_features.add("event_proximity")
+            used_features.add("event_proximity")
+        if counts["news_items"] > 0:
+            available_features.add("news_relevance_score")
+        if counts["candles"] > 0:
+            available_features.update(("market_regime", "time_of_day_bucket"))
+
+        available_features &= requested_features
+        used_features &= requested_features
+
+        available = {
+            family
+            for family in mode.families
+            if any(
+                feature in available_features
+                for feature in family_features[family]
+            )
+        }
         decision_used = {
             family
-            for family in (
-                "NIFTY price / structure",
-                "Momentum / volatility",
+            for family in mode.families
+            if any(
+                feature in used_features
+                for feature in family_features[family]
             )
-            if family in mode.families and family in available
         }
+
+        # The timeline is the executable truth: do not call a family "used"
+        # merely because raw rows exist. This keeps HIGH mode honest.
         decision_used.update(
             family
             for family in event_families
             if family in mode.families
+            and family in {"Futures", "Options", "Breadth / constituents"}
         )
-        if risk_windows:
-            for family in (
-                "Volatility / macro context",
-                "News / regime / time",
-            ):
-                if family in mode.families:
-                    decision_used.add(family)
+        if risk_windows and "Volatility / macro context" in mode.families:
+            decision_used.add("Volatility / macro context")
 
         available_requested = tuple(
             family for family in mode.families if family in available
@@ -688,12 +714,8 @@ class DesktopDataService:
         )
         return timeline, FeatureCoverageAudit(
             requested_touchpoints=mode.feature_count,
-            available_touchpoints=sum(
-                feature_sizes[family] for family in available_requested
-            ),
-            decision_used_touchpoints=sum(
-                feature_sizes[family] for family in decision_used_ordered
-            ),
+            available_touchpoints=len(available_features),
+            decision_used_touchpoints=len(used_features),
             requested_families=mode.families,
             available_families=available_requested,
             decision_used_families=decision_used_ordered,

@@ -395,8 +395,12 @@ def _horizon_return(
         if candle.at.astimezone(INDIA_TIME).date() != day:
             return None
         if candle.at >= target:
+            if occurrence.entry_price == 0:
+                return D(0)
             return (
-                _pct(candle.close - occurrence.entry_price, occurrence.entry_price)
+                (candle.close - occurrence.entry_price)
+                / occurrence.entry_price
+                * D(100)
                 * D(occurrence.direction)
             )
     return None

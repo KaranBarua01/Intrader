@@ -379,6 +379,12 @@ class DesktopLiveRuntime:
                 if active_day != now.date() or market is None:
                     from intrader.credentials import CredentialStore
 
+                    if active_day != now.date():
+                        with self._lock:
+                            self._latest_brain = None
+                            self._recovered_late = False
+                            self._last_backfill_at = None
+                        self._last_decision_minute = None
                     credential_store = CredentialStore()
                     transport = RequestsTransport()
                     session = authenticate(credential_store, transport)
@@ -425,7 +431,7 @@ class DesktopLiveRuntime:
                     market_close,
                 )
                 last = self._last_backfill_at or market_open
-                if cutoff - last >= timedelta(minutes=2):
+                if cutoff - last >= timedelta(minutes=1):
                     try:
                         self._backfill(
                             session,

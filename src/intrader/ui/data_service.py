@@ -35,12 +35,15 @@ from intrader.shadow_stream_engine import (
 )
 from intrader.storage import SQLiteStore
 from intrader.strategy_lab import analyze_strategies
+from intrader.ui.desktop_runtime import DesktopLiveRuntime, DesktopRuntimeStatus
 from intrader.ui.paths import database_path as default_database_path
 
 
 @dataclass(frozen=True, slots=True)
 class DesktopSnapshot:
     latest_decision: DecisionRecord | None
+    live_brain: object | None
+    runtime_status: DesktopRuntimeStatus
     active_shadow_trade: ShadowTrade | None
     completed_bundles: tuple
     recent_news: tuple
@@ -51,6 +54,16 @@ class DesktopSnapshot:
 class DesktopDataService:
     def __init__(self, database_path: Path | None = None) -> None:
         self.database_path = database_path or default_database_path()
+        self.runtime = DesktopLiveRuntime(self.database_path)
+
+    def start_live_runtime(self) -> None:
+        self.runtime.start()
+
+    def stop_live_runtime(self) -> None:
+        self.runtime.stop()
+
+    def runtime_status(self, now: datetime | None = None) -> DesktopRuntimeStatus:
+        return self.runtime.status(now)
 
     def snapshot(self, now: datetime | None = None) -> DesktopSnapshot:
         now = now or datetime.now(INDIA_TIME)
@@ -88,6 +101,8 @@ class DesktopDataService:
             )
         return DesktopSnapshot(
             latest_decision=None if not decisions else decisions[-1],
+            live_brain=self.runtime.latest_brain,
+            runtime_status=self.runtime.status(now),
             active_shadow_trade=None if not unsettled else unsettled[-1],
             completed_bundles=completed,
             recent_news=news,
@@ -144,27 +159,61 @@ class DesktopDataService:
             return store.load_reason_audits()
 
     def load_nifty_candles(self, day: date) -> tuple[Candle, ...]:
-        """Resolve NIFTY through the existing read-only market-access layer."""
-        config = load_config()
-        credential_store = CredentialStore()
-        transport = RequestsTransport()
-        session = authenticate(credential_store, transport)
-        market = check_market_access(
-            credential_store,
-            transport,
-            as_of=day,
-            session=session,
-        )
+        """Load cached NIFTY candles and append live tick-derived current bars.
+
+        Desktop rendering must not require a fresh broker login merely to read
+        data already being recorded by the live runtime.
+        """
+
         start = datetime.combine(day, time(9, 15), INDIA_TIME)
         end = datetime.combine(day, time(15, 30), INDIA_TIME)
-        with SQLiteStore(self.database_path) as store:
-            return store.load_candles(
-                market.instruments.spot.exchange,
-                market.instruments.spot.token,
-                "ONE_MINUTE",
+        with SQLiteStore(self.database_path, read_only=True) as store:
+            candles = list(
+                store.load_primary_index_candles(
+                    "ONE_MINUTE",
+                    start=start,
+                    end=end,
+                )
+            )
+            instruments = self.runtime.instruments
+            if instruments is None:
+                return tuple(candles)
+            ticks = store.load_index_snapshots(
+                instruments.spot.token,
                 start=start,
                 end=end,
             )
+
+        existing_minutes = {
+            item.at.astimezone(INDIA_TIME).replace(second=0, microsecond=0)
+            for item in candles
+        }
+        grouped: dict[datetime, list] = {}
+        for tick in ticks:
+            minute = tick.exchange_at.astimezone(INDIA_TIME).replace(
+                second=0,
+                microsecond=0,
+            )
+            if minute in existing_minutes:
+                continue
+            grouped.setdefault(minute, []).append(tick)
+
+        for minute in sorted(grouped):
+            rows = grouped[minute]
+            prices = [row.ltp for row in rows]
+            if not prices:
+                continue
+            candles.append(
+                Candle(
+                    at=minute,
+                    open=prices[0],
+                    high=max(prices),
+                    low=min(prices),
+                    close=prices[-1],
+                    volume=0,
+                )
+            )
+        return tuple(sorted(candles, key=lambda item: item.at))
 
     def refresh_global_news_range(self, start: datetime, end: datetime) -> int:
         """Refresh worldwide market headlines in bounded chunks for Time Travel."""

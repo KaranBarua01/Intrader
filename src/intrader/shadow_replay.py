@@ -77,11 +77,13 @@ class FrozenStrategySelection:
     strategy_id: str | None
     strategy_name: str | None
     development_sessions: int
+    hold_minutes: int
     training_start: str | None
     training_end: str | None
     development: ReplayMetrics
     candidates: tuple[ReplayCandidate, ...]
     occurrences: tuple[StrategyOccurrence, ...]
+    gross_horizon_returns: tuple[Decimal | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,10 +381,163 @@ def _trade(phase: str, occurrence: StrategyOccurrence) -> ReplayTradeResult:
     )
 
 
+def _horizon_return(
+    candles: Sequence[Candle],
+    occurrence: StrategyOccurrence,
+    hold_minutes: int,
+) -> Decimal | None:
+    target = occurrence.at + timedelta(minutes=hold_minutes)
+    day = occurrence.at.astimezone(INDIA_TIME).date()
+    for candle in candles:
+        if candle.at <= occurrence.at:
+            continue
+        if candle.at.astimezone(INDIA_TIME).date() != day:
+            return None
+        if candle.at >= target:
+            return (
+                _pct(candle.close - occurrence.entry_price, occurrence.entry_price)
+                * D(occurrence.direction)
+            )
+    return None
+
+
+def _horizon_returns(
+    performance: StrategyPerformance,
+    candles: Sequence[Candle],
+    hold_minutes: int,
+) -> tuple[Decimal | None, ...]:
+    ordered = tuple(sorted(candles, key=lambda item: item.at))
+    return tuple(
+        _horizon_return(ordered, occurrence, hold_minutes)
+        for occurrence in performance.occurrences
+    )
+
+
+def _metrics_from_returns(
+    performance: StrategyPerformance | None,
+    sessions: int,
+    returns_with_none: Sequence[Decimal | None],
+) -> ReplayMetrics:
+    if performance is None:
+        return _metrics(None, sessions)
+    returns = [value for value in returns_with_none if value is not None]
+    winning = [value for value in returns if value > 0]
+    losing = [value for value in returns if value < 0]
+    wins = len(winning)
+    losses = len(losing)
+    flats = sum(1 for value in returns if value == 0)
+    gross_positive = sum(winning, D(0))
+    gross_negative = abs(sum(losing, D(0)))
+    max_win_streak, max_loss_streak = _streaks(returns)
+    return ReplayMetrics(
+        sessions=sessions,
+        signals=performance.signals,
+        evaluable_signals=len(returns),
+        wins=wins,
+        losses=losses,
+        flats=flats,
+        win_rate_pct=None if not returns else D(wins) / D(len(returns)) * D(100),
+        average_return_30m_pct=_average(returns),
+        total_signed_return_30m_pct=sum(returns, D(0)),
+        average_winner_pct=_average(winning),
+        average_loser_pct=_average(losing),
+        profit_factor=None if gross_negative == 0 else gross_positive / gross_negative,
+        max_drawdown_pct_points=_max_drawdown(returns),
+        max_winning_streak=max_win_streak,
+        max_losing_streak=max_loss_streak,
+        average_mfe_30m_pct=None,
+        average_mae_30m_pct=None,
+    )
+
+
+def _pick_strategy_for_horizon(
+    snapshot: StrategyLabSnapshot,
+    development_sessions: int,
+    candles: Sequence[Candle],
+    *,
+    hold_minutes: int,
+    friction_bps: Decimal,
+) -> tuple[StrategyPerformance | None, tuple[Decimal | None, ...]]:
+    """Select only strategies with positive net expectancy at the actual hold."""
+
+    minimum_signals = max(8, development_sessions // 4)
+    friction_pct = friction_bps / D(100)
+    scored: list[
+        tuple[
+            StrategyPerformance,
+            tuple[Decimal | None, ...],
+            int,
+            Decimal,
+            Decimal,
+            Decimal,
+        ]
+    ] = []
+    for item in snapshot.strategies:
+        if item.definition.direction_scope == "PROCESS":
+            continue
+        gross_returns = _horizon_returns(item, candles, hold_minutes)
+        net_returns = [
+            value - friction_pct
+            for value in gross_returns
+            if value is not None
+        ]
+        if len(net_returns) < minimum_signals:
+            continue
+        positives = sum((value for value in net_returns if value > 0), D(0))
+        negatives = abs(sum((value for value in net_returns if value < 0), D(0)))
+        profit_factor = (
+            D("999") if negatives == 0 and positives > 0
+            else D(0) if negatives == 0
+            else positives / negatives
+        )
+        average = sum(net_returns, D(0)) / D(len(net_returns))
+        if average <= 0 or profit_factor <= 1:
+            continue
+
+        drawdown = _max_drawdown(net_returns)
+        segment_means: list[Decimal] = []
+        for part in range(3):
+            start = len(net_returns) * part // 3
+            end = len(net_returns) * (part + 1) // 3
+            segment = net_returns[start:end]
+            if segment:
+                segment_means.append(sum(segment, D(0)) / D(len(segment)))
+        stability = sum(1 for value in segment_means if value > 0)
+        if stability < 2:
+            continue
+        scored.append(
+            (
+                item,
+                gross_returns,
+                stability,
+                profit_factor,
+                drawdown,
+                average,
+            )
+        )
+
+    if not scored:
+        return None, ()
+
+    chosen = max(
+        scored,
+        key=lambda row: (
+            row[2],
+            row[5] / (D(1) + row[4]),
+            row[3],
+            row[0].signals,
+            row[0].definition.strategy_id,
+        ),
+    )
+    return chosen[0], chosen[1]
+
+
 def train_frozen_strategy(
     development_candles: Sequence[Candle],
     *,
     development_sessions: int,
+    hold_minutes: int = 30,
+    friction_bps: Decimal = D(0),
 ) -> FrozenStrategySelection:
     """Train/select one strategy using development candles only.
 
@@ -410,20 +565,38 @@ def train_frozen_strategy(
         ordered[-1].at,
         max_days=max_days,
     )
-    selected = _pick_strategy(snapshot, development_sessions)
+    selected, gross_horizon_returns = _pick_strategy_for_horizon(
+        snapshot,
+        development_sessions,
+        ordered,
+        hold_minutes=hold_minutes,
+        friction_bps=friction_bps,
+    )
+    net_horizon_returns = tuple(
+        None if value is None else value - friction_bps / D(100)
+        for value in gross_horizon_returns
+    )
     return FrozenStrategySelection(
         strategy_id=None if selected is None else selected.definition.strategy_id,
         strategy_name=None if selected is None else selected.definition.name,
         development_sessions=development_sessions,
+        hold_minutes=hold_minutes,
         training_start=dates[0].isoformat() if dates else None,
         training_end=dates[-1].isoformat() if dates else None,
-        development=_metrics(selected, development_sessions),
+        development=_metrics_from_returns(
+            selected,
+            development_sessions,
+            net_horizon_returns,
+        ),
         candidates=tuple(
             _candidate(item)
             for item in snapshot.strategies
             if item.definition.direction_scope != "PROCESS"
         ),
         occurrences=() if selected is None else selected.occurrences,
+        gross_horizon_returns=(
+            () if selected is None else gross_horizon_returns
+        ),
     )
 
 

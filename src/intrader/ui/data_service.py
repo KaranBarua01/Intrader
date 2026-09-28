@@ -35,12 +35,15 @@ from intrader.shadow_stream_engine import (
 )
 from intrader.storage import SQLiteStore
 from intrader.strategy_lab import analyze_strategies
+from intrader.ui.desktop_runtime import DesktopLiveRuntime, DesktopRuntimeStatus
 from intrader.ui.paths import database_path as default_database_path
 
 
 @dataclass(frozen=True, slots=True)
 class DesktopSnapshot:
     latest_decision: DecisionRecord | None
+    live_brain: object | None
+    runtime_status: DesktopRuntimeStatus
     active_shadow_trade: ShadowTrade | None
     completed_bundles: tuple
     recent_news: tuple
@@ -51,6 +54,16 @@ class DesktopSnapshot:
 class DesktopDataService:
     def __init__(self, database_path: Path | None = None) -> None:
         self.database_path = database_path or default_database_path()
+        self.runtime = DesktopLiveRuntime(self.database_path)
+
+    def start_live_runtime(self) -> None:
+        self.runtime.start()
+
+    def stop_live_runtime(self) -> None:
+        self.runtime.stop()
+
+    def runtime_status(self, now: datetime | None = None) -> DesktopRuntimeStatus:
+        return self.runtime.status(now)
 
     def snapshot(self, now: datetime | None = None) -> DesktopSnapshot:
         now = now or datetime.now(INDIA_TIME)
@@ -86,8 +99,14 @@ class DesktopDataService:
                     sum(1 for d in decisions if d.depth_imbalance is not None),
                 )
             )
+        session_decisions = [
+            decision for decision in decisions
+            if decision.session_date == now.astimezone(INDIA_TIME).date()
+        ]
         return DesktopSnapshot(
-            latest_decision=None if not decisions else decisions[-1],
+            latest_decision=None if not session_decisions else session_decisions[-1],
+            live_brain=self.runtime.latest_brain,
+            runtime_status=self.runtime.status(now),
             active_shadow_trade=None if not unsettled else unsettled[-1],
             completed_bundles=completed,
             recent_news=news,
@@ -144,27 +163,61 @@ class DesktopDataService:
             return store.load_reason_audits()
 
     def load_nifty_candles(self, day: date) -> tuple[Candle, ...]:
-        """Resolve NIFTY through the existing read-only market-access layer."""
-        config = load_config()
-        credential_store = CredentialStore()
-        transport = RequestsTransport()
-        session = authenticate(credential_store, transport)
-        market = check_market_access(
-            credential_store,
-            transport,
-            as_of=day,
-            session=session,
-        )
+        """Load cached NIFTY candles and append live tick-derived current bars.
+
+        Desktop rendering must not require a fresh broker login merely to read
+        data already being recorded by the live runtime.
+        """
+
         start = datetime.combine(day, time(9, 15), INDIA_TIME)
         end = datetime.combine(day, time(15, 30), INDIA_TIME)
-        with SQLiteStore(self.database_path) as store:
-            return store.load_candles(
-                market.instruments.spot.exchange,
-                market.instruments.spot.token,
-                "ONE_MINUTE",
+        with SQLiteStore(self.database_path, read_only=True) as store:
+            candles = list(
+                store.load_primary_index_candles(
+                    "ONE_MINUTE",
+                    start=start,
+                    end=end,
+                )
+            )
+            instruments = self.runtime.instruments
+            if instruments is None:
+                return tuple(candles)
+            ticks = store.load_index_snapshots(
+                instruments.spot.token,
                 start=start,
                 end=end,
             )
+
+        existing_minutes = {
+            item.at.astimezone(INDIA_TIME).replace(second=0, microsecond=0)
+            for item in candles
+        }
+        grouped: dict[datetime, list] = {}
+        for tick in ticks:
+            minute = tick.exchange_at.astimezone(INDIA_TIME).replace(
+                second=0,
+                microsecond=0,
+            )
+            if minute in existing_minutes:
+                continue
+            grouped.setdefault(minute, []).append(tick)
+
+        for minute in sorted(grouped):
+            rows = grouped[minute]
+            prices = [row.ltp for row in rows]
+            if not prices:
+                continue
+            candles.append(
+                Candle(
+                    at=minute,
+                    open=prices[0],
+                    high=max(prices),
+                    low=min(prices),
+                    close=prices[-1],
+                    volume=0,
+                )
+            )
+        return tuple(sorted(candles, key=lambda item: item.at))
 
     def refresh_global_news_range(self, start: datetime, end: datetime) -> int:
         """Refresh worldwide market headlines in bounded chunks for Time Travel."""
@@ -555,15 +608,6 @@ class DesktopDataService:
                         ),
                     )
                 )
-                events.append(
-                    FeatureEvent(
-                        at=at,
-                        family="Options microstructure",
-                        score=score,
-                        label="Option-chain OI/volume confirmation",
-                    )
-                )
-
             # Scheduled event context is a risk gate, not a fabricated
             # directional prediction.
             scheduled = store.load_scheduled_events(start=start, end=end)
@@ -587,42 +631,77 @@ class DesktopDataService:
         timeline = HistoricalFeatureTimeline(events, risk_windows)
         event_families = set(timeline.families)
 
-        available = set()
-        if counts["candles"] > 0:
-            available.update(
-                ("NIFTY price / structure", "Momentum / volatility")
-            )
-        if counts["future_snapshots"] > 0:
-            available.add("Futures")
-        if counts["option_snapshots"] > 0:
-            available.update(("Options", "Options microstructure"))
-        if counts["breadth_snapshots"] > 0:
-            available.add("Breadth / constituents")
-        if counts["index_snapshots"] > 0 or counts["scheduled_events"] > 0:
-            available.add("Volatility / macro context")
-        if counts["news_items"] > 0 or counts["scheduled_events"] > 0:
-            available.add("News / regime / time")
+        family_features = {
+            family: tuple(features)
+            for family, features in FEATURE_FAMILIES
+        }
+        requested_features = {
+            feature
+            for family in mode.families
+            for feature in family_features[family]
+        }
 
+        available_features: set[str] = set()
+        used_features: set[str] = set()
+
+        if counts["candles"] > 0:
+            available_features.update(family_features["NIFTY price / structure"])
+            available_features.update(family_features["Momentum / volatility"])
+            used_features.update(("spot_return_1m", "roc5"))
+        if counts["future_snapshots"] > 0:
+            available_features.update(family_features["Futures"])
+            used_features.update(
+                ("future_oi_change", "future_order_flow_imbalance")
+            )
+        if counts["option_snapshots"] > 0:
+            available_features.update(family_features["Options"])
+            available_features.update(family_features["Options microstructure"])
+            used_features.update(
+                ("call_put_oi_ratio", "call_put_volume_ratio")
+            )
+        if counts["breadth_snapshots"] > 0:
+            available_features.add("nifty_advancers_ratio")
+            used_features.add("nifty_advancers_ratio")
+        if counts["index_snapshots"] > 0:
+            available_features.update(("india_vix_level", "india_vix_change"))
+        if counts["scheduled_events"] > 0:
+            available_features.add("event_proximity")
+            used_features.add("event_proximity")
+        if counts["news_items"] > 0:
+            available_features.add("news_relevance_score")
+        if counts["candles"] > 0:
+            available_features.update(("market_regime", "time_of_day_bucket"))
+
+        available_features &= requested_features
+        used_features &= requested_features
+
+        available = {
+            family
+            for family in mode.families
+            if any(
+                feature in available_features
+                for feature in family_features[family]
+            )
+        }
         decision_used = {
             family
-            for family in (
-                "NIFTY price / structure",
-                "Momentum / volatility",
+            for family in mode.families
+            if any(
+                feature in used_features
+                for feature in family_features[family]
             )
-            if family in mode.families and family in available
         }
+
+        # The timeline is the executable truth: do not call a family "used"
+        # merely because raw rows exist. This keeps HIGH mode honest.
         decision_used.update(
             family
             for family in event_families
             if family in mode.families
+            and family in {"Futures", "Options", "Breadth / constituents"}
         )
-        if risk_windows:
-            for family in (
-                "Volatility / macro context",
-                "News / regime / time",
-            ):
-                if family in mode.families:
-                    decision_used.add(family)
+        if risk_windows and "Volatility / macro context" in mode.families:
+            decision_used.add("Volatility / macro context")
 
         available_requested = tuple(
             family for family in mode.families if family in available
@@ -635,12 +714,8 @@ class DesktopDataService:
         )
         return timeline, FeatureCoverageAudit(
             requested_touchpoints=mode.feature_count,
-            available_touchpoints=sum(
-                feature_sizes[family] for family in available_requested
-            ),
-            decision_used_touchpoints=sum(
-                feature_sizes[family] for family in decision_used_ordered
-            ),
+            available_touchpoints=len(available_features),
+            decision_used_touchpoints=len(used_features),
             requested_families=mode.families,
             available_families=available_requested,
             decision_used_families=decision_used_ordered,

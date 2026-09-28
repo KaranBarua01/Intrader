@@ -4,7 +4,13 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from intrader.historical import Candle, INDIA_TIME
-from intrader.shadow_replay import run_candle_proxy_replay
+from intrader.shadow_replay import _pick_strategy_for_horizon, run_candle_proxy_replay
+from intrader.strategy_lab import (
+    StrategyDefinition,
+    StrategyLabSnapshot,
+    StrategyOccurrence,
+    StrategyPerformance,
+)
 
 
 def _synthetic_sessions(count: int) -> tuple[Candle, ...]:
@@ -89,3 +95,94 @@ def test_replay_report_contains_trade_rows_and_risk_metrics() -> None:
         trade.result in {"WIN", "LOSS", "FLAT", "UNEVALUATED"}
         for trade in report.trades
     )
+
+
+def test_frozen_trainer_rejects_gross_edge_that_is_negative_after_costs() -> None:
+    start = datetime(2026, 1, 5, 9, 15, tzinfo=INDIA_TIME)
+    definition = StrategyDefinition(
+        "TEST_TINY_EDGE",
+        "Test",
+        "Tiny Edge",
+        "Synthetic development edge.",
+        "BULLISH",
+    )
+    occurrences = []
+    candles = []
+    for index in range(8):
+        at = start + timedelta(minutes=index * 15)
+        occurrences.append(
+            StrategyOccurrence(
+                strategy_id=definition.strategy_id,
+                at=at,
+                direction=1,
+                entry_price=Decimal("100"),
+                regime=None,
+                return_5m=Decimal("0.05"),
+                return_15m=Decimal("0.10"),
+                return_30m=Decimal("0.10"),
+                mfe_30m=Decimal("0.12"),
+                mae_30m=Decimal("-0.02"),
+            )
+        )
+        candles.extend(
+            (
+                Candle(
+                    at=at,
+                    open=Decimal("100"),
+                    high=Decimal("100.05"),
+                    low=Decimal("99.95"),
+                    close=Decimal("100"),
+                    volume=1000,
+                ),
+                Candle(
+                    at=at + timedelta(minutes=10),
+                    open=Decimal("100"),
+                    high=Decimal("100.12"),
+                    low=Decimal("99.98"),
+                    close=Decimal("100.10"),
+                    volume=1000,
+                ),
+            )
+        )
+    performance = StrategyPerformance(
+        definition=definition,
+        signals=8,
+        bullish_signals=8,
+        bearish_signals=0,
+        hit_rate_5m=Decimal("100"),
+        hit_rate_15m=Decimal("100"),
+        hit_rate_30m=Decimal("100"),
+        avg_return_5m=Decimal("0.05"),
+        avg_return_15m=Decimal("0.10"),
+        avg_return_30m=Decimal("0.10"),
+        avg_mfe_30m=Decimal("0.12"),
+        avg_mae_30m=Decimal("-0.02"),
+        sample_label="TEST",
+        occurrences=tuple(occurrences),
+    )
+    snapshot = StrategyLabSnapshot(
+        start=start,
+        end=start + timedelta(hours=2),
+        candle_count=len(candles),
+        session_count=1,
+        strategies=(performance,),
+        notes=(),
+    )
+
+    selected_without_costs, _ = _pick_strategy_for_horizon(
+        snapshot,
+        1,
+        candles,
+        hold_minutes=10,
+        friction_bps=Decimal("0"),
+    )
+    selected_after_costs, _ = _pick_strategy_for_horizon(
+        snapshot,
+        1,
+        candles,
+        hold_minutes=10,
+        friction_bps=Decimal("20"),
+    )
+
+    assert selected_without_costs is performance
+    assert selected_after_costs is None

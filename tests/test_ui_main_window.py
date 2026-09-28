@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 import intrader.ui.utility_pages as utility_pages
 from intrader.historical import Candle, INDIA_TIME
+from intrader.ui.data_service import DesktopDataService
 from intrader.ui.main_window import MainWindow
 
 
@@ -20,6 +21,9 @@ def _window(monkeypatch):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(utility_pages, "QWebEngineView", None)
     monkeypatch.setattr(MainWindow, "refresh_all", lambda self: None)
+    monkeypatch.setattr(MainWindow, "refresh_live_runtime_view", lambda self: None)
+    monkeypatch.setattr(DesktopDataService, "start_live_runtime", lambda self: None)
+    monkeypatch.setattr(DesktopDataService, "stop_live_runtime", lambda self: None)
     window = MainWindow()
     window.show()
     app.processEvents()

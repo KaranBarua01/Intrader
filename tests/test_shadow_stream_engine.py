@@ -109,3 +109,34 @@ def test_exact_option_adapter_refuses_to_invent_premiums() -> None:
 
     with pytest.raises(ShadowExecutionError, match="expired-option prices"):
         adapter.evaluate()
+
+
+def test_stream_engine_rejects_entry_that_cannot_finish_before_close(monkeypatch) -> None:
+    import intrader.shadow_stream_engine as engine_module
+
+    at = datetime(2026, 8, 3, 15, 25, tzinfo=INDIA_TIME)
+
+    def always_signal(_strategy_id, candles):
+        return 1 if candles else None
+
+    monkeypatch.setattr(engine_module, "detect_strategy_signal", always_signal)
+    engine = CausalFrozenEngine(
+        _spec(),
+        ShadowReplayConfig(
+            development_sessions=1,
+            blind_sessions=1,
+            starting_capital=Decimal("10000"),
+            allocation_pct=Decimal("50"),
+            friction_bps=Decimal("0"),
+            trader_timeframes=(1,),
+        ),
+    )
+
+    engine.consume(_candle(at, "24000"))
+    engine.finish(_candle(at + timedelta(minutes=5), "24005"))
+    report = engine.report()
+
+    assert engine.position is None
+    assert report.trades == ()
+    assert report.rejected_signals
+    assert report.rejected_signals[0].reason == "insufficient session time for hold horizon"

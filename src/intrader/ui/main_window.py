@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDate, QSettings, QThread, QTime, Signal, Qt
+from PySide6.QtCore import QDate, QSettings, QThread, QTime, QTimer, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QGraphicsDropShadowEffect,
@@ -74,11 +74,18 @@ class MainWindow(QMainWindow):
         self._page_widgets: dict[str, QWidget] = {}
         self._dock_visible = False
         self._latest_shadow_replay_report = None
+        self._runtime_refresh_busy = False
         self._build_ui()
         self.apply_accent(self.current_accent)
         saved_geometry = self.settings.value("geometry")
         if saved_geometry is not None:
             self.restoreGeometry(saved_geometry)
+
+        self.service.start_live_runtime()
+        self.runtime_refresh_timer = QTimer(self)
+        self.runtime_refresh_timer.setInterval(5000)
+        self.runtime_refresh_timer.timeout.connect(self.refresh_live_runtime_view)
+        self.runtime_refresh_timer.start()
         self.refresh_all()
 
     def _build_ui(self) -> None:
@@ -331,6 +338,38 @@ class MainWindow(QMainWindow):
             page.apply_layout_preset("Compact")
         if self._dock_visible:
             self.toggle_bottom_dock()
+
+    def refresh_live_runtime_view(self) -> None:
+        """Refresh the live desktop from local SQLite without network work."""
+
+        if self._runtime_refresh_busy:
+            return
+        self._runtime_refresh_busy = True
+
+        def task():
+            now = datetime.now(INDIA_TIME)
+            return (
+                self.service.snapshot(now),
+                self.service.load_nifty_candles(now.date()),
+            )
+
+        def done(payload) -> None:
+            self._runtime_refresh_busy = False
+            desktop, candles = payload
+            self.intrader_page.refresh_snapshot(desktop)
+            self.intrader_page.set_candles(candles)
+            self.shadow_page.refresh(desktop)
+            self.history_page.refresh(desktop)
+            status = desktop.runtime_status
+            self.statusBar().showMessage(
+                f"{status.phase.replace('_', ' ')} • {status.message}",
+                4500,
+            )
+
+        def failed(_message: str) -> None:
+            self._runtime_refresh_busy = False
+
+        self._run_task(task, done, failed)
 
     def refresh_all(self) -> None:
         self.refresh_button.setEnabled(False)
@@ -806,6 +845,9 @@ class MainWindow(QMainWindow):
         self._run_task(task, done)
 
     def closeEvent(self, event) -> None:
+        if hasattr(self, "runtime_refresh_timer"):
+            self.runtime_refresh_timer.stop()
+        self.service.stop_live_runtime()
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("accent", self.current_accent)
         super().closeEvent(event)

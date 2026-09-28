@@ -298,8 +298,7 @@ def _paperize_development(
     max_drawdown = D(0)
     max_drawdown_pct = D(0)
     wins = losses = flats = 0
-    for occurrence in selection.occurrences:
-        gross = occurrence.return_30m
+    for gross in selection.gross_horizon_returns:
         if gross is None:
             continue
         net = gross - config.friction_bps / D(100)
@@ -466,6 +465,8 @@ def _run_one_frozen_engine(
         selection = train_frozen_strategy(
             development_aggregated,
             development_sessions=config.development_sessions,
+            hold_minutes=_HOLD[timeframe_minutes],
+            friction_bps=config.friction_bps,
         )
     engine_id = _engine_id(
         timeframe_minutes,
@@ -727,6 +728,8 @@ def run_shadow_arena(
         selections[timeframe] = train_frozen_strategy(
             development_aggregated,
             development_sessions=config.development_sessions,
+            hold_minutes=_HOLD[timeframe],
+            friction_bps=config.friction_bps,
         )
 
     trader_reports = tuple(
@@ -779,7 +782,7 @@ def run_shadow_arena(
         ablation_results=ablations,
         walk_forward_results=walk_forward,
         notes=(
-            "Development is used only to select/freeze each timeframe strategy.",
+            "Development selects each timeframe strategy using that engine's actual hold horizon and net returns after configured friction; no qualifying net edge means no frozen strategy.",
             "Blind execution is event-driven: one-minute candles are consumed chronologically and future candles are not available to the engine.",
             "1m/5m/10m/15m engines use independent paper accounts and holding horizons.",
             "Historical feature families affect decisions only when they are both requested and causally available.",

@@ -418,7 +418,17 @@ class CausalFrozenEngine:
             return
 
         snapshot = self._feature_snapshot(bar.at)
-        rejection = self._gate(direction, snapshot)
+        local_at = bar.at.astimezone(INDIA_TIME)
+        market_close = datetime.combine(
+            local_at.date(),
+            time(15, 30),
+            INDIA_TIME,
+        )
+        rejection = None
+        if bar.at + timedelta(minutes=self.spec.hold_minutes) > market_close:
+            rejection = "insufficient session time for hold horizon"
+        if rejection is None:
+            rejection = self._gate(direction, snapshot)
         if rejection is None and self.position is not None:
             rejection = "position already open in this timeframe trader"
 

@@ -99,8 +99,12 @@ class DesktopDataService:
                     sum(1 for d in decisions if d.depth_imbalance is not None),
                 )
             )
+        session_decisions = [
+            decision for decision in decisions
+            if decision.session_date == now.astimezone(INDIA_TIME).date()
+        ]
         return DesktopSnapshot(
-            latest_decision=None if not decisions else decisions[-1],
+            latest_decision=None if not session_decisions else session_decisions[-1],
             live_brain=self.runtime.latest_brain,
             runtime_status=self.runtime.status(now),
             active_shadow_trade=None if not unsettled else unsettled[-1],

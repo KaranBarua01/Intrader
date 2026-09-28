@@ -199,6 +199,11 @@ class IntraderModePage(QWidget):
         status_row.addWidget(self.metrics, 1)
         root.addLayout(status_row)
 
+        self.runtime_status = QLabel("SESSION RUNTIME — STARTING")
+        self.runtime_status.setObjectName("StatusPill")
+        self.runtime_status.setWordWrap(True)
+        root.addWidget(self.runtime_status)
+
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         left = QWidget()
@@ -377,21 +382,111 @@ class IntraderModePage(QWidget):
             summary = f"{decision.brain_state} • {decision.regime}"
         self.interpretation_summary.setText(summary)
 
+    def _set_live_brain_interpretation(self, brain) -> None:
+        family_map = {family.name: family.value for family in brain.families}
+        for key, label in self.interpretation_values.items():
+            value = family_map.get(key)
+            if value is None:
+                state = "N/A"
+                object_name = "Muted"
+            elif value > Decimal("0.15"):
+                state = "Bullish"
+                object_name = "Positive"
+            elif value < Decimal("-0.15"):
+                state = "Bearish"
+                object_name = "Negative"
+            else:
+                state = "Neutral"
+                object_name = "Muted"
+            label.setText(state)
+            label.setObjectName(object_name)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+        reasons = " • ".join(brain.reasons[:3]) if brain.reasons else "No active safety gate."
+        self.interpretation_summary.setText(
+            f"{brain.state} • family coverage {brain.family_coverage}% • {reasons}"
+        )
+
     def refresh_snapshot(self, snapshot) -> None:
+        runtime = snapshot.runtime_status
+        next_text = ""
+        if runtime.next_transition is not None:
+            remaining = max(
+                0,
+                int(
+                    (
+                        runtime.next_transition.astimezone(INDIA_TIME)
+                        - datetime.now(INDIA_TIME)
+                    ).total_seconds()
+                    // 60
+                ),
+            )
+            next_text = (
+                f" • next {runtime.next_transition.astimezone(INDIA_TIME):%H:%M}"
+                f" ({remaining}m)"
+            )
+        feed_text = (
+            "feed connecting"
+            if runtime.expected_count == 0
+            else f"feed {runtime.fresh_count}/{runtime.expected_count}"
+        )
+        recovery = " • late-start recovered" if runtime.recovered_late else ""
+        self.runtime_status.setText(
+            f"{runtime.phase.replace('_', ' ')} • {feed_text}{next_text}{recovery} • "
+            f"{runtime.message}"
+        )
+
         decision = snapshot.latest_decision
-        if decision is None:
-            self.metrics.set_metric("WAITING", "No Action")
+        brain = snapshot.live_brain
+
+        if decision is None and brain is None:
+            self.metrics.set_metric(
+                "WAITING",
+                runtime.phase.replace("_", " "),
+            )
             for key in ("DIRECTION", "CONFIDENCE", "ENTRY QUALITY", "REVERSAL RISK"):
                 self.metrics.set_metric(key, "N/A")
             self.why.set_reasons([])
             self.why_not.set_reasons([])
-            self.context_text.setText("No verified live context snapshot yet.")
+            self.context_text.setText(
+                "Live recorder is starting. Interpretation appears when the required "
+                "market families are synchronized."
+            )
             for label in self.interpretation_values.values():
                 label.setText("N/A")
                 label.setObjectName("Muted")
             self.interpretation_summary.setText(
-                "Waiting for a verified Market Brain decision."
+                "Waiting for synchronized live market data."
             )
+        elif decision is None and brain is not None:
+            self.metrics.set_metric(
+                "WAITING",
+                runtime.phase.replace("_", " "),
+                "neutral",
+            )
+            self.metrics.set_metric(
+                "DIRECTION",
+                str(brain.direction_score),
+                _tone(brain.direction_score),
+            )
+            self.metrics.set_metric("CONFIDENCE", f"{brain.confidence}%")
+            self.metrics.set_metric("ENTRY QUALITY", str(brain.entry_quality))
+            self.metrics.set_metric(
+                "REVERSAL RISK",
+                str(brain.reversal_risk),
+                "negative" if brain.reversal_risk > 70 else "neutral",
+            )
+            self.why.set_reasons(
+                [("LIVE_BRAIN", reason) for reason in brain.reasons[:4]]
+            )
+            self.why_not.set_reasons([])
+            self.context_text.setText(
+                f"Live Market Brain • {runtime.phase.replace('_', ' ')}\n"
+                f"Family coverage     {brain.family_coverage}%\n"
+                f"Trading permission  {'YES' if runtime.phase == 'LIVE' else 'NO'}"
+            )
+            self._set_live_brain_interpretation(brain)
         else:
             action_tone = (
                 "positive" if decision.action == "BUY_CALL"
@@ -432,7 +527,11 @@ class IntraderModePage(QWidget):
         if trade is None:
             self.shadow_text.setText(
                 "No active shadow position.\n"
-                "Paper-mode entries will appear here when the Market Brain qualifies one."
+                + (
+                    "Paper entries are disabled outside the configured live window."
+                    if runtime.phase != "LIVE"
+                    else "Paper-mode entries will appear here when the Market Brain qualifies one."
+                )
             )
         else:
             self.shadow_text.setText(

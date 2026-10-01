@@ -24,6 +24,7 @@ from intrader.credentials import CredentialStore, credential_is_valid
 from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
+from intrader.today_download import TodayDownloadError, download_today_1m
 from intrader.live_feed import LiveFeed
 from intrader.market_confirmation_pipeline import build_stored_market_confirmation
 from intrader.options_pipeline import OptionsPipelineError, build_stored_options_intelligence
@@ -204,6 +205,38 @@ def main(argv: list[str] | None = None) -> int:
         if snapshot.reasons:
             print(f"Reason: {', '.join(snapshot.reasons)}")
         return 0 if snapshot.state == "READY" else 1
+
+    if argv == ["download-today-1m"]:
+        try:
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            market = check_market_access(
+                credential_store,
+                transport,
+                session=session,
+            )
+            report = download_today_1m(
+                session,
+                transport,
+                market.instruments,
+                output_root=Path.cwd() / "data" / "historical",
+            )
+        except TodayDownloadError as exc:
+            print("HISTORICAL DOWNLOAD FAILED")
+            print(f"Reason: {exc}")
+            return 1
+        except Exception:
+            print("HISTORICAL DOWNLOAD FAILED")
+            print("Reason: ACCESS_UNAVAILABLE")
+            return 1
+        print("HISTORICAL DOWNLOAD OK")
+        print(f"Trading date: {report.trading_date}")
+        print(f"Instruments: {len(report.instruments)}")
+        print(f"Rows: {report.total_rows}")
+        print(f"CSV: {report.csv_path}")
+        print(f"Manifest: {report.manifest_path}")
+        return 0
 
     if argv and argv[0] == "backfill-session":
         if len(argv) != 5:
@@ -1006,7 +1039,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
-            "check-live-feed SECONDS | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
+            "check-live-feed SECONDS | download-today-1m | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
             "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate | desktop]"
         )
         return 2

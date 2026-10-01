@@ -67,3 +67,28 @@ python -m intrader check-live-feed 20
 `READY` requires fresh NIFTY spot, India VIX, nearest future, and all selected ATM ±4 CE/PE ticks. Any missing, stale, disconnected, or malformed critical data gives `NO TRADE`. Outside market hours, `NO TRADE` is expected. The probe sends no orders and ends automatically after the requested seconds.
 
 Intrader is currently in Phase 1, Checkpoint 3. Signals and the dashboard are not implemented yet.
+
+
+## Download today's one-minute candles
+
+After market access is configured, download every completed one-minute candle available for the current trading day:
+
+```powershell
+python -m intrader download-today-1m
+```
+
+The command is read-only. It downloads:
+
+- NIFTY spot
+- India VIX
+- nearest NIFTY future
+- current nearest-expiry NIFTY ATM +/-4 CE and PE strikes
+
+Output is written under:
+
+```text
+data/historical/YYYY-MM-DD/market_1m.csv
+data/historical/YYYY-MM-DD/manifest.json
+```
+
+The CSV contains timestamp, instrument identity, expiry/strike/option side where relevant, OHLC, and volume. If run during market hours, only completed minutes are downloaded; after the close, the full available session is requested. No broker orders are placed.

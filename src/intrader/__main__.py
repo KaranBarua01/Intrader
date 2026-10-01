@@ -11,8 +11,16 @@ from intrader.config import load_config
 from intrader.credentials import CredentialStore, credential_is_valid
 from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
+from intrader.historical import HistoricalDownloadError, download_today_candles
 from intrader.live_feed import LiveFeed
 from intrader.secrets import REQUIRED_SECRET_NAMES
+
+
+USAGE = (
+    "Usage: python -m intrader "
+    "[doctor | credentials set NAME | check-market-access | "
+    "check-live-feed SECONDS | download-today-1m]"
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,8 +93,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Reason: {', '.join(snapshot.reasons)}")
         return 0 if snapshot.state == "READY" else 1
 
+    if argv == ["download-today-1m"]:
+        try:
+            report = download_today_candles(
+                CredentialStore(),
+                RequestsTransport(),
+                output_root=Path.cwd() / "data" / "historical",
+            )
+        except HistoricalDownloadError as exc:
+            print(f"HISTORICAL DOWNLOAD FAILED: {exc}")
+            return 1
+        print("HISTORICAL DOWNLOAD OK")
+        print(f"Trading date: {report.trading_date}")
+        print(f"Instruments: {len(report.instruments)}")
+        print(f"Rows: {report.total_rows}")
+        print(f"CSV: {report.csv_path}")
+        print(f"Manifest: {report.manifest_path}")
+        return 0
+
     if argv:
-        print("Usage: python -m intrader [doctor | credentials set NAME | check-market-access | check-live-feed SECONDS]")
+        print(USAGE)
         return 2
 
     print(f"Intrader {__version__}")

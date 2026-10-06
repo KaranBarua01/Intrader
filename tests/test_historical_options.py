@@ -123,3 +123,24 @@ def test_invalid_ohlc_fails_closed(tmp_path) -> None:
 
     with pytest.raises(HistoricalOptionDataError, match="OHLC"):
         load_historical_option_csv(path)
+
+
+def test_exact_candle_lookup_is_timestamp_strict(tmp_path) -> None:
+    path = tmp_path / "options_1m.csv"
+    _write_fixture(path)
+    data = load_historical_option_csv(path)
+
+    exact = data.candle_at(
+        Decimal("24500"),
+        "CE",
+        datetime(2024, 10, 23, 9, 16, tzinfo=INDIA_TIME),
+    )
+    missing = data.candle_at(
+        Decimal("24500"),
+        "CE",
+        datetime(2024, 10, 23, 9, 18, tzinfo=INDIA_TIME),
+    )
+
+    assert exact is not None
+    assert exact.at.strftime("%H:%M") == "09:16"
+    assert missing is None

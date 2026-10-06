@@ -580,8 +580,8 @@ class ShadowTraderPage(QWidget):
 
         limitation = Card("MONEY RESULT STATUS")
         note = QLabel(
-            "Paper balances are directional NIFTY proxy accounts using your allocation and friction "
-            "settings. They are not exact historical option-premium P&L until expired-option data is connected."
+            "PROXY uses directional NIFTY returns. OPTION_PREMIUM uses cached Upstox expired-option "
+            "1-minute premiums, causal next-bar entry and discrete lot sizing; missing session files fail closed."
         )
         note.setWordWrap(True)
         limitation.add_widget(note)
@@ -837,8 +837,16 @@ class ShadowTraderPage(QWidget):
                         trade.closed_at.replace("T", " ")[:16],
                         f"{trade.hold_minutes}m",
                         trade.direction,
-                        f"{trade.entry_underlying:.2f}",
-                        f"{trade.exit_underlying:.2f}",
+                        (
+                            f"{trade.option_entry_price:.2f}"
+                            if trade.option_entry_price is not None
+                            else f"{trade.entry_underlying:.2f}"
+                        ),
+                        (
+                            f"{trade.option_exit_price:.2f}"
+                            if trade.option_exit_price is not None
+                            else f"{trade.exit_underlying:.2f}"
+                        ),
                         self._fmt_pct(trade.gross_return_pct, 4),
                         self._fmt_pct(trade.net_return_pct, 4),
                         self._fmt_money(trade.paper_pnl),

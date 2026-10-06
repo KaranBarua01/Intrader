@@ -30,6 +30,7 @@ from intrader.historical_options import (
 )
 from intrader.expired_option_download import (
     ExpiredOptionDownloadError,
+    download_expired_option_sessions,
     download_expired_options_1m,
 )
 from intrader.instruments import fetch_instrument_master, resolve_nifty_spot
@@ -279,6 +280,60 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Complete CE/PE strikes: {summary.complete_pair_strikes}")
         print(f"First candle: {summary.first_candle.isoformat()}")
         print(f"Last candle: {summary.last_candle.isoformat()}")
+        return 0
+
+    if argv and argv[0] == "download-expired-options-batch":
+        if (
+            len(argv) != 3
+            or not argv[2].isdigit()
+            or not 1 <= int(argv[2]) <= 250
+        ):
+            print(
+                "Usage: python -m intrader download-expired-options-batch "
+                "END_DATE SESSIONS (1-250)"
+            )
+            return 2
+        try:
+            end_date = date.fromisoformat(argv[1])
+            requested_sessions = int(argv[2])
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            master = fetch_instrument_master(transport)
+            spot = resolve_nifty_spot(master)
+            upstox = UpstoxExpiredClient.from_secret_store(credential_store)
+            report = download_expired_option_sessions(
+                session,
+                transport,
+                upstox,
+                spot,
+                end_date,
+                requested_sessions,
+                output_root=Path.cwd() / "data" / "historical",
+                progress=print,
+            )
+        except (ValueError, ExpiredOptionDownloadError) as exc:
+            print("EXPIRED OPTION BATCH FAILED")
+            print(f"Reason: {exc}")
+            return 1
+        except Exception:
+            print("EXPIRED OPTION BATCH FAILED")
+            print("Reason: ACCESS_UNAVAILABLE")
+            return 1
+        print("EXPIRED OPTION BATCH OK")
+        print(
+            f"Sessions: {len(report.completed_dates)}/"
+            f"{report.requested_sessions}"
+        )
+        print(
+            f"Range: {report.completed_dates[0]} -> "
+            f"{report.completed_dates[-1]}"
+        )
+        print(f"Downloaded: {len(report.downloaded_dates)}")
+        print(f"Cached: {len(report.cached_dates)}")
+        print(f"Skipped non-sessions: {len(report.skipped_non_sessions)}")
+        print(f"Rows: {report.total_rows}")
+        print(f"Summary: {report.summary_path}")
         return 0
 
     if argv and argv[0] == "download-expired-options":
@@ -1124,7 +1179,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
-            "check-live-feed SECONDS | download-today-1m | download-expired-options YYYY-MM-DD | check-option-history YYYY-MM-DD | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
+            "check-live-feed SECONDS | download-today-1m | download-expired-options YYYY-MM-DD | download-expired-options-batch END_DATE SESSIONS | check-option-history YYYY-MM-DD | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
             "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate | desktop]"
         )
         return 2

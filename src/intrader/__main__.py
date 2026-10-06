@@ -24,6 +24,10 @@ from intrader.credentials import CredentialStore, SUPPORTED_CREDENTIALS, credent
 from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
+from intrader.historical_options import (
+    HistoricalOptionDataError,
+    load_historical_option_csv,
+)
 from intrader.expired_option_download import (
     ExpiredOptionDownloadError,
     download_expired_options_1m,
@@ -242,6 +246,39 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Rows: {report.total_rows}")
         print(f"CSV: {report.csv_path}")
         print(f"Manifest: {report.manifest_path}")
+        return 0
+
+    if argv and argv[0] == "check-option-history":
+        if len(argv) != 2:
+            print("Usage: python -m intrader check-option-history YYYY-MM-DD")
+            return 2
+        try:
+            trading_date = date.fromisoformat(argv[1])
+            path = (
+                Path.cwd()
+                / "data"
+                / "historical"
+                / trading_date.isoformat()
+                / "options_1m.csv"
+            )
+            data = load_historical_option_csv(path)
+            summary = data.summary()
+            if summary.trading_date != trading_date:
+                raise HistoricalOptionDataError(
+                    "historical option file date does not match requested date"
+                )
+        except (ValueError, HistoricalOptionDataError) as exc:
+            print("OPTION HISTORY INVALID")
+            print(f"Reason: {exc}")
+            return 1
+        print("OPTION HISTORY OK")
+        print(f"Trading date: {summary.trading_date}")
+        print(f"Rows: {summary.rows}")
+        print(f"Contracts: {summary.contracts}")
+        print(f"Strikes: {summary.strikes}")
+        print(f"Complete CE/PE strikes: {summary.complete_pair_strikes}")
+        print(f"First candle: {summary.first_candle.isoformat()}")
+        print(f"Last candle: {summary.last_candle.isoformat()}")
         return 0
 
     if argv and argv[0] == "download-expired-options":
@@ -1087,7 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
-            "check-live-feed SECONDS | download-today-1m | download-expired-options YYYY-MM-DD | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
+            "check-live-feed SECONDS | download-today-1m | download-expired-options YYYY-MM-DD | check-option-history YYYY-MM-DD | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
             "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate | desktop]"
         )
         return 2

@@ -364,3 +364,49 @@ def test_download_tolerates_empty_outer_buffer_contract(
             "reason": "UPSTOX_EMPTY_CANDLES",
         }
     ]
+
+
+
+def test_download_fails_closed_when_empty_contract_breaks_atm_coverage(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "intrader.expired_option_download.fetch_candles",
+        lambda *_args, **_kwargs: _spot_candles(),
+    )
+
+    class MissingAtmUpstox(FakeUpstox):
+        def get_historical_candles(
+            self, instrument_key, from_date, to_date=None
+        ):
+            self.candle_calls.append(instrument_key)
+            assert from_date == date(2024, 10, 23)
+            if instrument_key == "NSE_FO|24500-PE|24-10-2024":
+                raise UpstoxNoDataError(
+                    "No expired option candles returned"
+                )
+            return (
+                ExpiredOptionCandle(
+                    at=datetime(2024, 10, 23, 3, 45, tzinfo=timezone.utc),
+                    open=Decimal("100"),
+                    high=Decimal("110"),
+                    low=Decimal("95"),
+                    close=Decimal("105"),
+                    volume=1000,
+                    open_interest=2000,
+                ),
+            )
+
+    with pytest.raises(
+        ExpiredOptionDownloadError,
+        match="ATM coverage incomplete",
+    ):
+        download_expired_options_1m(
+            object(),
+            object(),
+            MissingAtmUpstox(),
+            _spot(),
+            date(2024, 10, 23),
+            output_root=tmp_path,
+            request_delay=0,
+        )

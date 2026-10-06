@@ -121,6 +121,10 @@ class HistoricalOptionDataset:
             key: tuple(values)
             for key, values in by_contract.items()
         }
+        self._by_contract_time = {
+            (row.strike, row.option_type, row.at): row
+            for row in ordered
+        }
 
     @property
     def trading_date(self) -> date:
@@ -178,6 +182,18 @@ class HistoricalOptionDataset:
                 f"historical option contract unavailable: {strike} {side}"
             )
         return rows
+
+    def candle_at(
+        self,
+        strike: Decimal,
+        option_type: str,
+        at: datetime,
+    ) -> HistoricalOptionCandle | None:
+        """Return the exact timestamped candle for one strike/side."""
+
+        if at.tzinfo is None:
+            raise HistoricalOptionDataError("option candle timestamp must be timezone aware")
+        return self._by_contract_time.get((strike, option_type.upper(), at))
 
     def visible_at(
         self,

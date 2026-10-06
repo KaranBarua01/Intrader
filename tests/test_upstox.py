@@ -7,6 +7,7 @@ from intrader.upstox import (
     NIFTY_50_INSTRUMENT_KEY,
     UpstoxDataError,
     UpstoxExpiredClient,
+    UpstoxNoDataError,
 )
 
 
@@ -148,3 +149,16 @@ def test_from_secret_store_reads_optional_upstox_token() -> None:
 def test_from_secret_store_requires_upstox_token() -> None:
     with pytest.raises(UpstoxDataError, match="token unavailable"):
         UpstoxExpiredClient.from_secret_store(MemorySecrets(None))
+
+
+def test_empty_historical_candles_raise_no_data_error() -> None:
+    transport = FakeTransport(
+        [{"status": "success", "data": {"candles": []}}]
+    )
+    client = UpstoxExpiredClient("secret-token", transport)
+
+    with pytest.raises(UpstoxNoDataError, match="No expired option candles"):
+        client.get_historical_candles(
+            "NSE_FO|58542|03-10-2024",
+            date(2024, 9, 17),
+        )

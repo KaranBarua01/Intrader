@@ -28,6 +28,7 @@ from intrader.upstox import (
     ExpiredOptionContract,
     UpstoxDataError,
     UpstoxExpiredClient,
+    UpstoxNoDataError,
 )
 
 
@@ -202,12 +203,26 @@ def download_expired_options_1m(
 
     rows: list[tuple[ExpiredOptionContract, ExpiredOptionCandle]] = []
     contract_rows: list[dict[str, object]] = []
+    missing_contracts: list[dict[str, str]] = []
     for index, contract in enumerate(selected):
         try:
             candles = upstox.get_historical_candles(
                 contract.instrument_key,
                 trading_date,
             )
+        except UpstoxNoDataError:
+            missing_contracts.append(
+                {
+                    "trading_symbol": contract.trading_symbol,
+                    "instrument_key": contract.instrument_key,
+                    "strike": _decimal_text(contract.strike_price),
+                    "option_type": contract.option_type,
+                    "reason": "UPSTOX_EMPTY_CANDLES",
+                }
+            )
+            if request_delay > 0 and index < len(selected) - 1:
+                sleeper(request_delay)
+            continue
         except UpstoxDataError as exc:
             raise ExpiredOptionDownloadError(
                 f"Expired option candles unavailable for {contract.trading_symbol}"
@@ -303,7 +318,12 @@ def download_expired_options_1m(
             "Whole-day spot range is used only for raw-data acquisition. "
             "Replay logic must remain causal/no-lookahead."
         ),
-        "contract_count": len(selected),
+        "requested_contract_count": len(selected),
+        "contract_count": len(contract_rows),
+        "coverage_state": (
+            "DEGRADED_BUFFER_ONLY" if missing_contracts else "COMPLETE"
+        ),
+        "missing_contracts": missing_contracts,
         "total_rows": len(rows),
         "csv": csv_path.name,
         "contracts": contract_rows,
@@ -316,7 +336,7 @@ def download_expired_options_1m(
         spot_low=spot_low,
         spot_high=spot_high,
         selected_strikes=selected_strikes,
-        contract_count=len(selected),
+        contract_count=len(contract_rows),
         total_rows=len(rows),
         csv_path=csv_path,
         manifest_path=manifest_path,

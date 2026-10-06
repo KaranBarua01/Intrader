@@ -14,7 +14,11 @@ from intrader.expired_option_download import (
 )
 from intrader.historical import Candle
 from intrader.instruments import Instrument
-from intrader.upstox import ExpiredOptionCandle, ExpiredOptionContract
+from intrader.upstox import (
+    ExpiredOptionCandle,
+    ExpiredOptionContract,
+    UpstoxNoDataError,
+)
 
 
 def _spot() -> Instrument:
@@ -303,3 +307,60 @@ def test_batch_reuses_valid_cached_session(tmp_path, monkeypatch) -> None:
     assert report.cached_dates == (cached_day,)
     assert downloaded == [date(2024, 10, 22)]
     assert report.total_rows == 18750
+
+
+
+def test_download_tolerates_empty_outer_buffer_contract(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "intrader.expired_option_download.fetch_candles",
+        lambda *_args, **_kwargs: _spot_candles(),
+    )
+
+    class MissingOuterBufferUpstox(FakeUpstox):
+        def get_historical_candles(
+            self, instrument_key, from_date, to_date=None
+        ):
+            self.candle_calls.append(instrument_key)
+            assert from_date == date(2024, 10, 23)
+            if instrument_key == "NSE_FO|24700-PE|24-10-2024":
+                raise UpstoxNoDataError(
+                    "No expired option candles returned"
+                )
+            return (
+                ExpiredOptionCandle(
+                    at=datetime(2024, 10, 23, 3, 45, tzinfo=timezone.utc),
+                    open=Decimal("100"),
+                    high=Decimal("110"),
+                    low=Decimal("95"),
+                    close=Decimal("105"),
+                    volume=1000,
+                    open_interest=2000,
+                ),
+            )
+
+    report = download_expired_options_1m(
+        object(),
+        object(),
+        MissingOuterBufferUpstox(),
+        _spot(),
+        date(2024, 10, 23),
+        output_root=tmp_path,
+        request_delay=0,
+    )
+
+    assert report.contract_count == 17
+    manifest = json.loads(report.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["requested_contract_count"] == 18
+    assert manifest["contract_count"] == 17
+    assert manifest["coverage_state"] == "DEGRADED_BUFFER_ONLY"
+    assert manifest["missing_contracts"] == [
+        {
+            "trading_symbol": "NIFTY 24700 PE 24 OCT 24",
+            "instrument_key": "NSE_FO|24700-PE|24-10-2024",
+            "strike": "24700",
+            "option_type": "PE",
+            "reason": "UPSTOX_EMPTY_CANDLES",
+        }
+    ]

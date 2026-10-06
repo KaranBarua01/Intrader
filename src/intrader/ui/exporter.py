@@ -127,8 +127,10 @@ def export_shadow_review_bundle(
                 "decision engine may only read observations with timestamp <= simulated clock"
             ),
             "paper_money_note": (
-                "Paper P&L is a directional NIFTY proxy until historical option-premium "
-                "data is connected."
+                "Paper P&L uses cached real expired-option premiums with next-bar "
+                "entry and discrete lot sizing."
+                if config.execution_mode == "OPTION_PREMIUM"
+                else "Paper P&L uses directional NIFTY proxy returns."
             ),
         },
         "historical_replay_report": (

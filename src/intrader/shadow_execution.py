@@ -1,9 +1,8 @@
 """Execution adapters for Shadow Trader research.
 
-The proxy adapter is available now. The option-premium adapter boundary is
-defined so Upstox/another expired-option source can be attached without
-rewriting the causal engine. It intentionally raises until complete timestamped
-premium data is supplied.
+PROXY evaluates directional NIFTY movement. OPTION_PREMIUM evaluates a long
+historical CE/PE premium using real entry/exit prices and discrete contract lots.
+Neither adapter can place broker orders.
 """
 
 from __future__ import annotations
@@ -25,6 +24,8 @@ class ExecutionResult:
     gross_return_pct: Decimal
     net_return_pct: Decimal
     paper_pnl: Decimal
+    quantity: int | None = None
+    capital_used: Decimal | None = None
 
 
 class ExecutionAdapter(Protocol):
@@ -38,12 +39,13 @@ class ExecutionAdapter(Protocol):
         direction: int,
         allocated_capital: Decimal,
         friction_bps: Decimal,
+        lot_size: int | None = None,
     ) -> ExecutionResult:
         ...
 
 
 class ProxyExecutionAdapter:
-    """Directional NIFTY proxy execution used until option premiums exist."""
+    """Directional NIFTY proxy execution."""
 
     mode = "PROXY"
 
@@ -55,9 +57,13 @@ class ProxyExecutionAdapter:
         direction: int,
         allocated_capital: Decimal,
         friction_bps: Decimal,
+        lot_size: int | None = None,
     ) -> ExecutionResult:
+        del lot_size
         if entry_price <= 0 or exit_price <= 0:
             raise ShadowExecutionError("proxy execution price invalid")
+        if direction not in {-1, 1}:
+            raise ShadowExecutionError("proxy execution direction invalid")
         gross = (
             (exit_price - entry_price)
             / entry_price
@@ -73,18 +79,47 @@ class ProxyExecutionAdapter:
 
 
 class HistoricalOptionExecutionAdapter:
-    """Reserved boundary for exact CE/PE historical fills.
-
-    This adapter is intentionally unavailable until a provider supplies complete
-    timestamped option premiums (and preferably bid/ask) for the replay window.
-    """
+    """Long CE/PE execution from real historical option premium candles."""
 
     mode = "OPTION_PREMIUM"
 
-    def evaluate(self, **_kwargs) -> ExecutionResult:
-        raise ShadowExecutionError(
-            "exact historical option-premium execution requires complete "
-            "timestamped expired-option prices; no synthetic premium is allowed"
+    def evaluate(
+        self,
+        *,
+        entry_price: Decimal,
+        exit_price: Decimal,
+        direction: int,
+        allocated_capital: Decimal,
+        friction_bps: Decimal,
+        lot_size: int | None = None,
+    ) -> ExecutionResult:
+        if entry_price <= 0 or exit_price <= 0:
+            raise ShadowExecutionError("historical option premium invalid")
+        if direction not in {-1, 1}:
+            raise ShadowExecutionError("historical option direction invalid")
+        if lot_size is None or int(lot_size) <= 0:
+            raise ShadowExecutionError("historical option lot size unavailable")
+        if allocated_capital <= 0:
+            raise ShadowExecutionError("allocated capital invalid")
+
+        lot = int(lot_size)
+        lot_cost = entry_price * D(lot)
+        lots = int(allocated_capital // lot_cost)
+        if lots < 1:
+            raise ShadowExecutionError(
+                "allocated capital cannot fund one historical option lot"
+            )
+        quantity = lots * lot
+        capital_used = entry_price * D(quantity)
+
+        gross = (exit_price - entry_price) / entry_price * D(100)
+        net = gross - friction_bps / D(100)
+        return ExecutionResult(
+            gross_return_pct=gross,
+            net_return_pct=net,
+            paper_pnl=capital_used * net / D(100),
+            quantity=quantity,
+            capital_used=capital_used,
         )
 
 

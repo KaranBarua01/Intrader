@@ -52,11 +52,11 @@ def test_news_resource_catalog_contains_requested_sources() -> None:
     } <= names
 
 
-def test_expired_options_are_explicitly_pending() -> None:
+def test_expired_options_are_available_through_upstox() -> None:
     rows = {dataset: (source, status, rule) for dataset, source, status, rule in DATA_COVERAGE}
     source, status, rule = rows["Expired NIFTY options"]
     assert "Upstox" in source
-    assert status == "PENDING"
+    assert status == "AVAILABLE"
     assert "Angel One" in rule
 
 

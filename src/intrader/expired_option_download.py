@@ -256,6 +256,28 @@ def download_expired_options_1m(
     if not rows:
         raise ExpiredOptionDownloadError("No expired option candles returned")
 
+    available_sides: dict[Decimal, set[str]] = {}
+    for item in contract_rows:
+        strike = Decimal(str(item["strike"]))
+        available_sides.setdefault(strike, set()).add(
+            str(item["option_type"])
+        )
+    low_index = _nearest_index(selected_strikes, spot_low)
+    high_index = _nearest_index(selected_strikes, spot_high)
+    core_strikes = selected_strikes[
+        min(low_index, high_index) : max(low_index, high_index) + 1
+    ]
+    incomplete_core = tuple(
+        strike
+        for strike in core_strikes
+        if available_sides.get(strike, set()) != {"CE", "PE"}
+    )
+    if incomplete_core:
+        values = ", ".join(_decimal_text(value) for value in incomplete_core)
+        raise ExpiredOptionDownloadError(
+            f"ATM coverage incomplete for strike(s): {values}"
+        )
+
     rows.sort(
         key=lambda item: (
             item[1].at,

@@ -4,19 +4,12 @@ from typing import Protocol
 
 import keyring
 
-from intrader.secrets import SecretStore
+from intrader.secrets import OPTIONAL_SECRET_NAMES, REQUIRED_SECRET_NAMES, SecretStore
 
 
 SERVICE_NAME = "Intrader"
 
-SUPPORTED_CREDENTIALS = frozenset(
-    {
-        "api_key",
-        "client_code",
-        "mpin",
-        "totp_secret",
-    }
-)
+SUPPORTED_CREDENTIALS = frozenset((*REQUIRED_SECRET_NAMES, *OPTIONAL_SECRET_NAMES))
 
 
 def credential_is_valid(name: str, value: str | None) -> bool:

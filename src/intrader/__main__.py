@@ -20,7 +20,7 @@ from intrader.checkpoint2 import MarketAccessError, check_market_access
 from intrader.config import load_config
 from intrader.context_pipeline import refresh_context
 from intrader.context_sources import RequestsContextTransport
-from intrader.credentials import CredentialStore, credential_is_valid
+from intrader.credentials import CredentialStore, SUPPORTED_CREDENTIALS, credential_is_valid
 from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return desktop_main()
     if argv and argv[:2] == ["credentials", "set"]:
-        if len(argv) != 3 or argv[2] not in REQUIRED_SECRET_NAMES:
+        if len(argv) != 3 or argv[2] not in SUPPORTED_CREDENTIALS:
             print("Unsupported credential name")
             return 2
         name = argv[2]

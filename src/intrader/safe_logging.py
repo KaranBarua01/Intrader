@@ -5,15 +5,15 @@ import logging
 from pathlib import Path
 import re
 
-from intrader.secrets import REQUIRED_SECRET_NAMES, SecretStore
+from intrader.secrets import OPTIONAL_SECRET_NAMES, REQUIRED_SECRET_NAMES, SecretStore
 
 
 _SENSITIVE_NAMES = frozenset(
-    (*REQUIRED_SECRET_NAMES, "jwt_token", "refresh_token", "feed_token", "totp_code")
+    (*REQUIRED_SECRET_NAMES, *OPTIONAL_SECRET_NAMES, "jwt_token", "refresh_token", "feed_token", "totp_code")
 )
 _KEY_VALUE = re.compile(
     r"(?i)(\b(?:api_key|client_code|mpin|totp_secret|totp_code|"
-    r"jwt_token|refresh_token|feed_token)\b['\"]?\s*[:=]\s*['\"]?)"
+    r"jwt_token|refresh_token|feed_token|upstox_analytics_token)\b['\"]?\s*[:=]\s*['\"]?)"
     r"([^'\"\s,}\]]+)"
 )
 
@@ -58,7 +58,7 @@ def configure_logging(
 
     values: set[str] = set()
     if secret_store is not None:
-        for name in REQUIRED_SECRET_NAMES:
+        for name in (*REQUIRED_SECRET_NAMES, *OPTIONAL_SECRET_NAMES):
             try:
                 value = secret_store.get(name)
             except Exception:

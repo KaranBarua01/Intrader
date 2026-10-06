@@ -5,7 +5,7 @@ from intrader.safe_logging import configure_logging
 
 class MemorySecrets:
     def get(self, name: str) -> str | None:
-        return {"api_key": "alpha-dummy", "mpin": "beta-dummy"}.get(name)
+        return {"api_key": "alpha-dummy", "mpin": "beta-dummy", "upstox_analytics_token": "gamma-dummy"}.get(name)
 
     def set(self, name: str, value: str) -> None:
         raise NotImplementedError
@@ -49,3 +49,15 @@ def test_reconfiguration_does_not_duplicate_messages(tmp_path) -> None:
     logger.log(logging.INFO, "one event")
 
     assert log_path.read_text(encoding="utf-8").count("one event") == 1
+
+
+def test_logging_redacts_upstox_analytics_token(tmp_path) -> None:
+    log_path = tmp_path / "intrader.log"
+    logger = configure_logging(log_path, secret_store=MemorySecrets())
+
+    logger.info("upstox_analytics_token=gamma-dummy")
+    logger.info("payload=%s", {"upstox_analytics_token": "gamma-dummy"})
+
+    content = log_path.read_text(encoding="utf-8")
+    assert "gamma-dummy" not in content
+    assert content.count("[REDACTED]") >= 2

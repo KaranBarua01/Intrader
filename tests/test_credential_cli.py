@@ -52,3 +52,17 @@ def test_credential_cli_rejects_invalid_totp_seed(monkeypatch, capsys) -> None:
     assert main(["credentials", "set", "totp_secret"]) == 1
     assert store.values == {}
     assert "totp_secret: not stored" in capsys.readouterr().out
+
+
+def test_credential_cli_stores_optional_upstox_token(monkeypatch, capsys) -> None:
+    store = MemorySecrets()
+    monkeypatch.setattr("intrader.__main__.CredentialStore", lambda: store)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "dummy-upstox-token")
+
+    exit_code = main(["credentials", "set", "upstox_analytics_token"])
+
+    assert exit_code == 0
+    assert store.values == {"upstox_analytics_token": "dummy-upstox-token"}
+    output = capsys.readouterr().out
+    assert "upstox_analytics_token: stored" in output
+    assert "dummy-upstox-token" not in output

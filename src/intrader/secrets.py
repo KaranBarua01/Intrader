@@ -10,6 +10,10 @@ REQUIRED_SECRET_NAMES = (
     "totp_secret",
 )
 
+OPTIONAL_SECRET_NAMES = (
+    "upstox_analytics_token",
+)
+
 
 class SecretStore(ABC):
     """Abstract interface for retrieving Intrader's long-lived secrets."""

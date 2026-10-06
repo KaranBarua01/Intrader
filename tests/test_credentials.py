@@ -51,3 +51,13 @@ def test_delete_removes_stored_credential() -> None:
     store.delete("client_code")
 
     assert store.get("client_code") is None
+
+
+def test_store_round_trip_upstox_analytics_token() -> None:
+    backend = MemoryKeyring()
+    store = CredentialStore(backend=backend)
+
+    store.set("upstox_analytics_token", "dummy-upstox-token")
+
+    assert store.get("upstox_analytics_token") == "dummy-upstox-token"
+    assert backend.values[("Intrader", "upstox_analytics_token")] == "dummy-upstox-token"

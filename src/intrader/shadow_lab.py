@@ -160,7 +160,7 @@ DATA_COVERAGE: tuple[tuple[str, str, str, str], ...] = (
         "Expired NIFTY options",
         "Upstox Expired Instruments",
         "AVAILABLE",
-        "Cached real 1-minute OHLC, volume and OI; OPTION_PREMIUM replay fails closed when a session file is missing.",
+        "Angel One does not provide expired-option history; cached Upstox 1-minute OHLC, volume and OI power OPTION_PREMIUM replay, which fails closed when a session file is missing.",
     ),
     (
         "Forward option snapshots",

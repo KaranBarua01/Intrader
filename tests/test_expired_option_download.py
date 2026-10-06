@@ -6,6 +6,8 @@ import pytest
 
 from intrader.expired_option_download import (
     ExpiredOptionDownloadError,
+    ExpiredOptionDownloadReport,
+    download_expired_option_sessions,
     download_expired_options_1m,
     nearest_available_expiry,
     select_required_contracts,
@@ -165,3 +167,139 @@ def test_download_writes_real_option_schema(tmp_path, monkeypatch) -> None:
     assert manifest["contract_count"] == 18
     assert manifest["selected_strikes"][4] == "24500"
     assert "no-lookahead" in manifest["selection_note"]
+
+
+
+def test_batch_downloads_previous_sessions_and_skips_holiday(
+    tmp_path, monkeypatch
+) -> None:
+    attempted = []
+    holiday = date(2024, 10, 21)
+
+    def fake_download(
+        _session,
+        _transport,
+        _upstox,
+        _spot_instrument,
+        trading_date,
+        *,
+        output_root,
+        **_kwargs,
+    ):
+        attempted.append(trading_date)
+        if trading_date == holiday:
+            raise ExpiredOptionDownloadError(
+                "No NIFTY spot candles returned for requested date"
+            )
+        day_dir = output_root / trading_date.isoformat()
+        return ExpiredOptionDownloadReport(
+            trading_date=trading_date,
+            expiry=date(2024, 10, 24),
+            spot_low=Decimal("24400"),
+            spot_high=Decimal("24600"),
+            selected_strikes=(Decimal("24500"),),
+            contract_count=2,
+            total_rows=750,
+            csv_path=day_dir / "options_1m.csv",
+            manifest_path=day_dir / "options_manifest.json",
+        )
+
+    monkeypatch.setattr(
+        "intrader.expired_option_download.download_expired_options_1m",
+        fake_download,
+    )
+
+    report = download_expired_option_sessions(
+        object(),
+        object(),
+        object(),
+        _spot(),
+        date(2024, 10, 23),
+        3,
+        output_root=tmp_path,
+        request_delay=0,
+        session_delay=0,
+    )
+
+    assert report.completed_dates == (
+        date(2024, 10, 18),
+        date(2024, 10, 22),
+        date(2024, 10, 23),
+    )
+    assert report.skipped_non_sessions == (holiday,)
+    assert report.total_rows == 2250
+    assert attempted == [
+        date(2024, 10, 23),
+        date(2024, 10, 22),
+        date(2024, 10, 21),
+        date(2024, 10, 18),
+    ]
+    payload = json.loads(report.summary_path.read_text(encoding="utf-8"))
+    assert payload["completed_sessions"] == 3
+    assert payload["first_session"] == "2024-10-18"
+
+
+def test_batch_reuses_valid_cached_session(tmp_path, monkeypatch) -> None:
+    cached_day = date(2024, 10, 23)
+    cached_path = tmp_path / cached_day.isoformat() / "options_1m.csv"
+    cached_path.parent.mkdir(parents=True)
+    cached_path.write_text("placeholder", encoding="utf-8")
+
+    class CachedDataset:
+        def summary(self):
+            class Summary:
+                trading_date = cached_day
+                rows = 9750
+            return Summary()
+
+    monkeypatch.setattr(
+        "intrader.expired_option_download.load_historical_option_csv",
+        lambda _path: CachedDataset(),
+    )
+
+    downloaded = []
+
+    def fake_download(
+        _session,
+        _transport,
+        _upstox,
+        _spot_instrument,
+        trading_date,
+        *,
+        output_root,
+        **_kwargs,
+    ):
+        downloaded.append(trading_date)
+        day_dir = output_root / trading_date.isoformat()
+        return ExpiredOptionDownloadReport(
+            trading_date=trading_date,
+            expiry=date(2024, 10, 24),
+            spot_low=Decimal("24400"),
+            spot_high=Decimal("24600"),
+            selected_strikes=(Decimal("24500"),),
+            contract_count=2,
+            total_rows=9000,
+            csv_path=day_dir / "options_1m.csv",
+            manifest_path=day_dir / "options_manifest.json",
+        )
+
+    monkeypatch.setattr(
+        "intrader.expired_option_download.download_expired_options_1m",
+        fake_download,
+    )
+
+    report = download_expired_option_sessions(
+        object(),
+        object(),
+        object(),
+        _spot(),
+        cached_day,
+        2,
+        output_root=tmp_path,
+        request_delay=0,
+        session_delay=0,
+    )
+
+    assert report.cached_dates == (cached_day,)
+    assert downloaded == [date(2024, 10, 22)]
+    assert report.total_rows == 18750

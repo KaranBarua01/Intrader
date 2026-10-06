@@ -10,12 +10,13 @@ No broker order path exists here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from intrader.historical import Candle, INDIA_TIME
+from intrader.historical_options import HistoricalOptionDataset
 from intrader.shadow_lab import (
     FEATURE_FAMILIES,
     ShadowReplayConfig,
@@ -99,6 +100,12 @@ class ArenaTrade:
     feature_scores: tuple[tuple[str, Decimal], ...]
     exit_reason: str
     result: str
+    pricing_source: str = "NIFTY_PROXY"
+    option_strike: Decimal | None = None
+    option_type: str | None = None
+    option_entry_price: Decimal | None = None
+    option_exit_price: Decimal | None = None
+    option_quantity: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +404,12 @@ def _convert_trade(
         feature_scores=item.feature_scores,
         exit_reason=item.exit_reason,
         result=item.result,
+        pricing_source=item.pricing_source,
+        option_strike=item.option_strike,
+        option_type=item.option_type,
+        option_entry_price=item.option_entry_price,
+        option_exit_price=item.option_exit_price,
+        option_quantity=item.option_quantity,
     )
 
 
@@ -456,6 +469,7 @@ def _run_one_frozen_engine(
     timeline: HistoricalFeatureTimeline,
     enabled_families: Sequence[str],
     selection: FrozenStrategySelection | None = None,
+    option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
 ) -> tuple[FrozenStrategySelection, FrozenEngineSpec, StreamEngineReport]:
     if selection is None:
         development_aggregated = _aggregate_candles(
@@ -492,6 +506,7 @@ def _run_one_frozen_engine(
         spec=spec,
         config=config,
         timeline=timeline,
+        option_datasets=option_datasets,
     )
     return selection, spec, stream
 
@@ -505,6 +520,7 @@ def _build_trader(
     timeline: HistoricalFeatureTimeline,
     enabled_families: Sequence[str],
     selection: FrozenStrategySelection | None = None,
+    option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
 ) -> ArenaTraderReport:
     selection, spec, stream = _run_one_frozen_engine(
         development_one_minute=development_one_minute,
@@ -514,6 +530,7 @@ def _build_trader(
         timeline=timeline,
         enabled_families=enabled_families,
         selection=selection,
+        option_datasets=option_datasets,
     )
     label = TRADER_LABELS[timeframe_minutes]
     blind_trades = tuple(
@@ -568,6 +585,7 @@ def _run_ablations(
     timeline: HistoricalFeatureTimeline,
     coverage: FeatureCoverageAudit,
     selections: dict[int, FrozenStrategySelection],
+    option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
 ) -> tuple[AblationResult, ...]:
     rows: list[AblationResult] = []
     for timeframe in config.trader_timeframes:
@@ -581,6 +599,7 @@ def _run_ablations(
                 timeline=timeline,
                 enabled_families=families,
                 selection=selections[timeframe],
+                option_datasets=option_datasets,
             )
             account = stream.account
             rows.append(
@@ -605,6 +624,7 @@ def _run_walk_forward(
     config: ShadowReplayConfig,
     timeline: HistoricalFeatureTimeline,
     enabled_families: Sequence[str],
+    option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
 ) -> tuple[WalkForwardResult, ...]:
     if config.validation_mode != "WALK_FORWARD":
         return ()
@@ -647,6 +667,7 @@ def _run_walk_forward(
                 config=window_config,
                 timeline=timeline,
                 enabled_families=enabled_families,
+                option_datasets=option_datasets,
             )
             rows.append(
                 WalkForwardResult(
@@ -675,9 +696,12 @@ def run_shadow_arena(
     blind_previously_reviewed: bool = False,
     feature_coverage: FeatureCoverageAudit | None = None,
     timeline: HistoricalFeatureTimeline | None = None,
+    option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
 ) -> ShadowArenaReport:
     config = validate_replay_config(config)
     timeline = timeline or HistoricalFeatureTimeline()
+    if config.execution_mode == "OPTION_PREMIUM" and not option_datasets:
+        raise ValueError("OPTION_PREMIUM replay requires historical option datasets")
     ordered = tuple(sorted(candles, key=lambda item: item.at))
     all_dates = list(_dates(ordered))
     if len(all_dates) < config.required_sessions:
@@ -741,6 +765,7 @@ def run_shadow_arena(
             timeline=timeline,
             enabled_families=enabled_families,
             selection=selections[timeframe],
+            option_datasets=option_datasets,
         )
         for timeframe in config.trader_timeframes
     )
@@ -752,12 +777,14 @@ def run_shadow_arena(
         timeline=timeline,
         coverage=feature_coverage,
         selections=selections,
+        option_datasets=option_datasets,
     )
     walk_forward = _run_walk_forward(
         candles=ordered,
         config=config,
         timeline=timeline,
         enabled_families=enabled_families,
+        option_datasets=option_datasets,
     )
 
     blind_start = blind_dates[0].isoformat()
@@ -788,7 +815,18 @@ def run_shadow_arena(
             "Historical feature families affect decisions only when they are both requested and causally available.",
             "Ablation compares the same blind dates while progressively enabling genuinely wired feature families.",
             "Walk-forward is produced only when WALK_FORWARD validation is selected.",
-            "Paper P&L remains a NIFTY directional proxy until exact historical option-premium data is available.",
+            (
+                "Blind paper P&L uses cached Upstox expired-option premiums with "
+                "causal next-bar entry and discrete lot sizing."
+                if config.execution_mode == "OPTION_PREMIUM"
+                else "Paper P&L uses the configured NIFTY directional proxy."
+            ),
+            (
+                "Strategy selection is still trained on NIFTY price outcomes; option-premium "
+                "execution changes trade pricing/P&L, not the frozen signal rules."
+                if config.execution_mode == "OPTION_PREMIUM"
+                else "Proxy execution and strategy selection both use NIFTY price history."
+            ),
             "Reused blind windows are diagnostic only, not fresh validation.",
             "No broker order path is present in Shadow Arena.",
         ),

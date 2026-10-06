@@ -838,13 +838,13 @@ class ShadowTraderPage(QWidget):
                         f"{trade.hold_minutes}m",
                         trade.direction,
                         (
-                            f"{trade.option_entry_price:.2f}"
-                            if trade.option_entry_price is not None
+                            f"{getattr(trade, 'option_entry_price', None):.2f}"
+                            if getattr(trade, "option_entry_price", None) is not None
                             else f"{trade.entry_underlying:.2f}"
                         ),
                         (
-                            f"{trade.option_exit_price:.2f}"
-                            if trade.option_exit_price is not None
+                            f"{getattr(trade, 'option_exit_price', None):.2f}"
+                            if getattr(trade, "option_exit_price", None) is not None
                             else f"{trade.exit_underlying:.2f}"
                         ),
                         self._fmt_pct(trade.gross_return_pct, 4),

@@ -158,9 +158,9 @@ DATA_COVERAGE: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "Expired NIFTY options",
-        "Upstox later",
-        "PENDING",
-        "Angel One does not provide expired-option history. Add after Upstox reactivation.",
+        "Upstox Expired Instruments",
+        "AVAILABLE",
+        "Cached real 1-minute OHLC, volume and OI; OPTION_PREMIUM replay fails closed when a session file is missing.",
     ),
     (
         "Forward option snapshots",
@@ -342,7 +342,7 @@ class ShadowLabPlan:
     feature_count: int = 50
     execution_mode: str = "SHADOW_ONLY"
     primary_historical_source: str = "Angel One"
-    expired_options_source: str = "Upstox (pending reactivation)"
+    expired_options_source: str = "Upstox Expired Instruments"
 
     @property
     def split_label(self) -> str:

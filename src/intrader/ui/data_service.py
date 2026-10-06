@@ -17,6 +17,11 @@ from intrader.context_sources import RequestsContextTransport
 from intrader.historical_intelligence import analyze_historical_range, build_opening_possibilities
 from intrader.historical_reanalysis import reanalyze_stored_decision
 from intrader.historical import Candle, INDIA_TIME, fetch_candles
+from intrader.historical_options import (
+    HistoricalOptionDataError,
+    HistoricalOptionDataset,
+    load_historical_option_csv,
+)
 from intrader.records import DecisionRecord
 from intrader.shadow import ShadowTrade
 from intrader.shadow_arena import FeatureCoverageAudit, ShadowArenaReport, run_shadow_arena
@@ -730,12 +735,6 @@ class DesktopDataService:
         """Run frozen-engine Shadow Arena and return selected candles for playback."""
 
         config = validate_replay_config(config)
-        if config.execution_mode == "OPTION_PREMIUM":
-            raise ValueError(
-                "Exact historical option-premium execution is not available yet. "
-                "The 0.5.0 adapter slot is reserved, but this run must use PROXY until "
-                "complete timestamped expired-option premiums are connected."
-            )
         sessions = config.required_sessions
         candles = self.load_shadow_replay_candles(sessions)
         selected_dates = sorted({
@@ -751,6 +750,30 @@ class DesktopDataService:
         if not selected:
             raise ValueError("Shadow Trader historical candles unavailable")
 
+        option_datasets: dict[date, HistoricalOptionDataset] | None = None
+        if config.execution_mode == "OPTION_PREMIUM":
+            option_datasets = {}
+            missing: list[date] = []
+            historical_root = self.database_path.parent / "historical"
+            for day in selected_dates:
+                path = historical_root / day.isoformat() / "options_1m.csv"
+                try:
+                    dataset = load_historical_option_csv(path)
+                    if dataset.trading_date != day:
+                        raise HistoricalOptionDataError("historical option date mismatch")
+                    option_datasets[day] = dataset
+                except HistoricalOptionDataError:
+                    missing.append(day)
+            if missing:
+                preview = ", ".join(day.isoformat() for day in missing[:5])
+                suffix = "" if len(missing) <= 5 else f" (+{len(missing) - 5} more)"
+                raise ValueError(
+                    "OPTION_PREMIUM requires cached options_1m.csv for every replay "
+                    f"session. Missing {len(missing)} date(s): {preview}{suffix}. "
+                    "Download each missing date with: python -m intrader "
+                    "download-expired-options YYYY-MM-DD"
+                )
+
         timeline, coverage = self._build_shadow_feature_timeline(
             selected[0].at,
             selected[-1].at,
@@ -762,6 +785,7 @@ class DesktopDataService:
             config,
             feature_coverage=coverage,
             timeline=timeline,
+            option_datasets=option_datasets,
         )
 
         with SQLiteStore(self.database_path) as store:

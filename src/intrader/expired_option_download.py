@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -18,6 +18,10 @@ from typing import Callable, Sequence
 
 from intrader.auth import HTTPTransport, SmartSession
 from intrader.historical import Candle, INDIA_TIME, HistoricalDataError, fetch_candles
+from intrader.historical_options import (
+    HistoricalOptionDataError,
+    load_historical_option_csv,
+)
 from intrader.instruments import Instrument
 from intrader.upstox import (
     ExpiredOptionCandle,
@@ -46,6 +50,18 @@ class ExpiredOptionDownloadReport:
     total_rows: int
     csv_path: Path
     manifest_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ExpiredOptionBatchReport:
+    end_date: date
+    requested_sessions: int
+    completed_dates: tuple[date, ...]
+    downloaded_dates: tuple[date, ...]
+    cached_dates: tuple[date, ...]
+    skipped_non_sessions: tuple[date, ...]
+    total_rows: int
+    summary_path: Path
 
 
 def _market_window(trading_date: date) -> tuple[datetime, datetime]:
@@ -304,4 +320,160 @@ def download_expired_options_1m(
         total_rows=len(rows),
         csv_path=csv_path,
         manifest_path=manifest_path,
+    )
+
+
+
+def _cached_option_rows(output_root: Path, trading_date: date) -> int | None:
+    """Return validated cached row count, or None when the day must be fetched."""
+
+    csv_path = Path(output_root) / trading_date.isoformat() / "options_1m.csv"
+    if not csv_path.is_file():
+        return None
+    try:
+        dataset = load_historical_option_csv(csv_path)
+        summary = dataset.summary()
+    except HistoricalOptionDataError:
+        return None
+    if summary.trading_date != trading_date:
+        return None
+    return summary.rows
+
+
+def download_expired_option_sessions(
+    session: SmartSession,
+    angel_transport: HTTPTransport,
+    upstox: UpstoxExpiredClient,
+    spot: Instrument,
+    end_date: date,
+    sessions: int,
+    *,
+    output_root: Path,
+    strikes_each_side: int = 4,
+    request_delay: float = 0.10,
+    session_delay: float = 0.25,
+    sleeper: Callable[[float], None] = time_module.sleep,
+    progress: Callable[[str], None] | None = None,
+) -> ExpiredOptionBatchReport:
+    """Download the most recent N complete option sessions ending at end_date.
+
+    Existing validated options_1m.csv files are reused. Weekends are ignored,
+    exchange holidays are detected by an empty NIFTY spot response, and any
+    genuine broker/provider error stops the batch so partial progress can be
+    resumed safely.
+    """
+
+    if not 1 <= sessions <= 250:
+        raise ExpiredOptionDownloadError(
+            "Batch session count must be between 1 and 250"
+        )
+    if request_delay < 0 or session_delay < 0:
+        raise ExpiredOptionDownloadError("Batch delay invalid")
+
+    output_root = Path(output_root)
+    completed: list[date] = []
+    downloaded: list[date] = []
+    cached: list[date] = []
+    skipped: list[date] = []
+    total_rows = 0
+    candidate = end_date
+    scanned_days = 0
+    max_calendar_days = sessions * 3 + 45
+
+    while len(completed) < sessions and scanned_days < max_calendar_days:
+        scanned_days += 1
+        if candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+            continue
+
+        cached_rows = _cached_option_rows(output_root, candidate)
+        if cached_rows is not None:
+            completed.append(candidate)
+            cached.append(candidate)
+            total_rows += cached_rows
+            if progress is not None:
+                progress(
+                    f"[{len(completed)}/{sessions}] {candidate.isoformat()} "
+                    f"CACHED rows={cached_rows}"
+                )
+            candidate -= timedelta(days=1)
+            continue
+
+        try:
+            report = download_expired_options_1m(
+                session,
+                angel_transport,
+                upstox,
+                spot,
+                candidate,
+                output_root=output_root,
+                strikes_each_side=strikes_each_side,
+                request_delay=request_delay,
+                sleeper=sleeper,
+            )
+        except ExpiredOptionDownloadError as exc:
+            if str(exc) == "No NIFTY spot candles returned for requested date":
+                skipped.append(candidate)
+                if progress is not None:
+                    progress(f"[--] {candidate.isoformat()} NON-TRADING SESSION")
+                candidate -= timedelta(days=1)
+                continue
+            raise ExpiredOptionDownloadError(
+                f"Batch stopped at {candidate.isoformat()}: {exc}"
+            ) from exc
+
+        completed.append(candidate)
+        downloaded.append(candidate)
+        total_rows += report.total_rows
+        if progress is not None:
+            progress(
+                f"[{len(completed)}/{sessions}] {candidate.isoformat()} "
+                f"DOWNLOADED rows={report.total_rows}"
+            )
+        candidate -= timedelta(days=1)
+        if session_delay > 0 and len(completed) < sessions:
+            sleeper(session_delay)
+
+    if len(completed) < sessions:
+        raise ExpiredOptionDownloadError(
+            f"Only {len(completed)}/{sessions} historical option sessions "
+            "could be resolved inside the batch scan window"
+        )
+
+    completed_sorted = tuple(sorted(completed))
+    downloaded_sorted = tuple(sorted(downloaded))
+    cached_sorted = tuple(sorted(cached))
+    skipped_sorted = tuple(sorted(skipped))
+    batch_dir = output_root / "_option_batches"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = batch_dir / (
+        f"ending_{end_date.isoformat()}_{sessions}_sessions.json"
+    )
+    payload = {
+        "schema": "intrader-expired-option-batch-v1",
+        "end_date": end_date.isoformat(),
+        "requested_sessions": sessions,
+        "completed_sessions": len(completed_sorted),
+        "first_session": completed_sorted[0].isoformat(),
+        "last_session": completed_sorted[-1].isoformat(),
+        "downloaded_dates": [item.isoformat() for item in downloaded_sorted],
+        "cached_dates": [item.isoformat() for item in cached_sorted],
+        "skipped_non_sessions": [item.isoformat() for item in skipped_sorted],
+        "total_rows": total_rows,
+        "resume_rule": (
+            "Validated existing options_1m.csv files are reused; failed batches "
+            "may be rerun safely."
+        ),
+    }
+    summary_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    return ExpiredOptionBatchReport(
+        end_date=end_date,
+        requested_sessions=sessions,
+        completed_dates=completed_sorted,
+        downloaded_dates=downloaded_sorted,
+        cached_dates=cached_sorted,
+        skipped_non_sessions=skipped_sorted,
+        total_rows=total_rows,
+        summary_path=summary_path,
     )

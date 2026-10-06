@@ -22,6 +22,10 @@ class UpstoxDataError(Exception):
     """Upstox expired-instrument data is unavailable or invalid."""
 
 
+class UpstoxNoDataError(UpstoxDataError):
+    """Upstox returned a valid response but no candles for the contract."""
+
+
 class UpstoxJsonTransport(Protocol):
     def get_json(
         self,
@@ -247,5 +251,5 @@ class UpstoxExpiredClient:
             raise UpstoxDataError("Upstox candle response invalid") from None
 
         if not candles:
-            raise UpstoxDataError("No expired option candles returned")
+            raise UpstoxNoDataError("No expired option candles returned")
         return tuple(sorted(candles, key=lambda candle: candle.at))

@@ -12,12 +12,13 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from dataclasses import dataclass
-from datetime import datetime, timedelta, time
+from datetime import date, datetime, timedelta, time
 from decimal import Decimal
 from typing import Iterable, Mapping, Sequence
 
 from intrader.historical import Candle, INDIA_TIME
-from intrader.shadow_execution import execution_adapter
+from intrader.historical_options import HistoricalOptionDataError, HistoricalOptionDataset
+from intrader.shadow_execution import ShadowExecutionError, execution_adapter
 from intrader.shadow_lab import ShadowReplayConfig, TRADER_HOLD_MINUTES
 from intrader.strategy_lab import detect_strategy_signal
 
@@ -141,6 +142,12 @@ class StreamTrade:
     feature_scores: tuple[tuple[str, Decimal], ...]
     exit_reason: str
     result: str
+    pricing_source: str = "NIFTY_PROXY"
+    option_strike: Decimal | None = None
+    option_type: str | None = None
+    option_entry_price: Decimal | None = None
+    option_exit_price: Decimal | None = None
+    option_quantity: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +210,10 @@ class _OpenPosition:
     regime: str
     time_bucket: str
     feature_scores: tuple[tuple[str, Decimal], ...]
+    entry_underlying: Decimal
+    option_strike: Decimal | None = None
+    option_type: str | None = None
+    option_lot_size: int | None = None
     mfe_pct: Decimal = D(0)
     mae_pct: Decimal = D(0)
 
@@ -371,11 +382,13 @@ class CausalFrozenEngine:
         config: ShadowReplayConfig,
         *,
         timeline: HistoricalFeatureTimeline | None = None,
+        option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
     ) -> None:
         self.spec = spec
         self.config = config
         self.timeline = timeline or HistoricalFeatureTimeline()
         self.execution = execution_adapter(config.execution_mode)
+        self.option_datasets = dict(option_datasets or {})
         self.aggregator = CausalBarAggregator(spec.timeframe_minutes)
         self.history: list[Candle] = []
         self.position: _OpenPosition | None = None
@@ -389,8 +402,6 @@ class CausalFrozenEngine:
         self.equity_curve: list[tuple[str, Decimal]] = []
 
     def seed(self, one_minute_candles: Sequence[Candle]) -> None:
-        """Warm detector state with development candles without opening trades."""
-
         for candle in sorted(one_minute_candles, key=lambda item: item.at):
             bar = self.aggregator.feed(candle)
             if bar is not None:
@@ -400,8 +411,6 @@ class CausalFrozenEngine:
             self._append_history(flushed)
 
     def consume(self, candle: Candle) -> None:
-        """Consume exactly one new one-minute candle."""
-
         self._mark_position(candle)
         self._settle_rejected(candle)
         if self.position is not None:
@@ -419,21 +428,26 @@ class CausalFrozenEngine:
 
         snapshot = self._feature_snapshot(bar.at)
         local_at = bar.at.astimezone(INDIA_TIME)
-        market_close = datetime.combine(
+        entry_at = bar.at + (
+            timedelta(minutes=1)
+            if self.config.execution_mode == "OPTION_PREMIUM"
+            else timedelta(0)
+        )
+        market_last = datetime.combine(
             local_at.date(),
-            time(15, 30),
+            time(15, 29) if self.config.execution_mode == "OPTION_PREMIUM" else time(15, 30),
             INDIA_TIME,
         )
         rejection = None
-        if bar.at + timedelta(minutes=self.spec.hold_minutes) > market_close:
+        if entry_at + timedelta(minutes=self.spec.hold_minutes) > market_last:
             rejection = "insufficient session time for hold horizon"
         if rejection is None:
             rejection = self._gate(direction, snapshot)
         if rejection is None and self.position is not None:
             rejection = "position already open in this timeframe trader"
 
+        allocated = self.balance * self.config.allocation_pct / D(100)
         if rejection is not None:
-            allocated = self.balance * self.config.allocation_pct / D(100)
             self.pending_rejected.append(
                 _PendingRejected(
                     at=bar.at,
@@ -445,16 +459,20 @@ class CausalFrozenEngine:
             )
             return
 
-        feature_scores = tuple(snapshot.scores)
-        self.position = _OpenPosition(
-            opened_at=bar.at,
-            direction=direction,
-            entry_price=bar.close,
-            allocated_capital=self.balance * self.config.allocation_pct / D(100),
-            regime=_regime(self.history),
-            time_bucket=_time_bucket(bar.at),
-            feature_scores=feature_scores,
-        )
+        open_error = self._open_position(bar, direction, snapshot, allocated)
+        if open_error is not None:
+            self.rejected.append(
+                StreamRejectedSignal(
+                    timeframe_minutes=self.spec.timeframe_minutes,
+                    engine_id=self.spec.engine_id,
+                    at=bar.at.isoformat(),
+                    direction="CALL / LONG" if direction > 0 else "PUT / LONG",
+                    reason=open_error,
+                    hypothetical_return_pct=None,
+                    hypothetical_pnl=None,
+                    classification="UNEXECUTABLE_OPTION_HISTORY",
+                )
+            )
 
     def finish(self, last_candle: Candle | None = None) -> None:
         flushed = self.aggregator.flush()
@@ -465,9 +483,6 @@ class CausalFrozenEngine:
             self._settle_rejected(last_candle)
             if self.position is not None:
                 self._close_position(last_candle, "SESSION_END")
-            # Rejected signals whose evaluation horizon extends beyond market
-            # close remain explicitly unevaluated; they are never rolled into
-            # the next trading day.
             for pending in self.pending_rejected:
                 self.rejected.append(
                     StreamRejectedSignal(
@@ -477,7 +492,7 @@ class CausalFrozenEngine:
                         direction=(
                             "CALL / LONG"
                             if pending.direction > 0
-                            else "PUT / SHORT"
+                            else ("PUT / LONG" if self.config.execution_mode == "OPTION_PREMIUM" else "PUT / SHORT")
                         ),
                         reason=pending.reason,
                         hypothetical_return_pct=None,
@@ -514,9 +529,7 @@ class CausalFrozenEngine:
             losses=losses,
             flats=flats,
             profit_factor=None if negative == 0 else positive / negative,
-            average_return_pct=(
-                None if not returns else sum(returns, D(0)) / D(len(returns))
-            ),
+            average_return_pct=None if not returns else sum(returns, D(0)) / D(len(returns)),
             max_losing_streak=longest,
         )
         return StreamEngineReport(
@@ -534,10 +547,7 @@ class CausalFrozenEngine:
         days = sorted({item.at.astimezone(INDIA_TIME).date() for item in self.history})
         if len(days) > 2:
             keep = set(days[-2:])
-            self.history = [
-                item for item in self.history
-                if item.at.astimezone(INDIA_TIME).date() in keep
-            ]
+            self.history = [item for item in self.history if item.at.astimezone(INDIA_TIME).date() in keep]
 
     def _feature_snapshot(self, at: datetime) -> FeatureSnapshot:
         external = self.timeline.snapshot(at, self.spec.enabled_families)
@@ -558,10 +568,7 @@ class CausalFrozenEngine:
             snapshot.high_impact_event_active
             and any(
                 family in self.spec.enabled_families
-                for family in (
-                    "Volatility / macro context",
-                    "News / regime / time",
-                )
+                for family in ("Volatility / macro context", "News / regime / time")
             )
         ):
             return "high-impact event risk window"
@@ -572,11 +579,76 @@ class CausalFrozenEngine:
                 return "multi-family feature contradiction"
         return None
 
+    def _dataset(self, at: datetime) -> HistoricalOptionDataset | None:
+        return self.option_datasets.get(at.astimezone(INDIA_TIME).date())
+
+    def _open_position(
+        self,
+        bar: Candle,
+        direction: int,
+        snapshot: FeatureSnapshot,
+        allocated: Decimal,
+    ) -> str | None:
+        if self.config.execution_mode == "PROXY":
+            self.position = _OpenPosition(
+                opened_at=bar.at,
+                direction=direction,
+                entry_price=bar.close,
+                allocated_capital=allocated,
+                regime=_regime(self.history),
+                time_bucket=_time_bucket(bar.at),
+                feature_scores=tuple(snapshot.scores),
+                entry_underlying=bar.close,
+            )
+            return None
+
+        dataset = self._dataset(bar.at)
+        if dataset is None:
+            return "historical option dataset unavailable for trading date"
+        try:
+            strike = dataset.nearest_complete_strike(bar.close)
+            side = "CE" if direction > 0 else "PE"
+            entry = dataset.candle_at(
+                strike,
+                side,
+                bar.at + timedelta(minutes=1),
+            )
+        except HistoricalOptionDataError:
+            return "historical option contract unavailable"
+        if entry is None:
+            return "next-bar option entry candle unavailable"
+        if allocated < entry.open * D(entry.lot_size):
+            return "allocated capital below one historical option lot"
+
+        self.position = _OpenPosition(
+            opened_at=entry.at,
+            direction=direction,
+            entry_price=entry.open,
+            allocated_capital=allocated,
+            regime=_regime(self.history),
+            time_bucket=_time_bucket(bar.at),
+            feature_scores=tuple(snapshot.scores),
+            entry_underlying=bar.close,
+            option_strike=strike,
+            option_type=side,
+            option_lot_size=entry.lot_size,
+        )
+        return None
+
     def _mark_position(self, candle: Candle) -> None:
         position = self.position
-        if position is None:
+        if position is None or candle.at < position.opened_at:
             return
-        if position.direction > 0:
+        if self.config.execution_mode == "OPTION_PREMIUM":
+            dataset = self._dataset(position.opened_at)
+            if dataset is None or position.option_strike is None or position.option_type is None:
+                return
+            row = dataset.candle_at(position.option_strike, position.option_type, candle.at)
+            if row is None:
+                return
+            favorable = _pct(row.high - position.entry_price, position.entry_price)
+            adverse = _pct(row.low - position.entry_price, position.entry_price)
+        elif position.direction > 0:
             favorable = _pct(candle.high - position.entry_price, position.entry_price)
             adverse = _pct(candle.low - position.entry_price, position.entry_price)
         else:
@@ -589,13 +661,33 @@ class CausalFrozenEngine:
         position = self.position
         if position is None:
             return
-        execution = self.execution.evaluate(
-            entry_price=position.entry_price,
-            exit_price=candle.close,
-            direction=position.direction,
-            allocated_capital=position.allocated_capital,
-            friction_bps=self.config.friction_bps,
-        )
+
+        option_exit = None
+        option_mode = self.config.execution_mode == "OPTION_PREMIUM"
+        if option_mode:
+            dataset = self._dataset(position.opened_at)
+            if dataset is None or position.option_strike is None or position.option_type is None or position.option_lot_size is None:
+                raise ShadowExecutionError("historical option position metadata unavailable")
+            option_exit = dataset.candle_at(position.option_strike, position.option_type, candle.at)
+            if option_exit is None:
+                raise ShadowExecutionError("historical option exit candle unavailable")
+            execution = self.execution.evaluate(
+                entry_price=position.entry_price,
+                exit_price=option_exit.close,
+                direction=1,
+                allocated_capital=position.allocated_capital,
+                friction_bps=self.config.friction_bps,
+                lot_size=position.option_lot_size,
+            )
+        else:
+            execution = self.execution.evaluate(
+                entry_price=position.entry_price,
+                exit_price=candle.close,
+                direction=position.direction,
+                allocated_capital=position.allocated_capital,
+                friction_bps=self.config.friction_bps,
+            )
+
         gross = execution.gross_return_pct
         net = execution.net_return_pct
         pnl = execution.paper_pnl
@@ -604,10 +696,7 @@ class CausalFrozenEngine:
         drawdown = self.peak - self.balance
         self.max_drawdown = max(self.max_drawdown, drawdown)
         if self.peak > 0:
-            self.max_drawdown_pct = max(
-                self.max_drawdown_pct,
-                drawdown / self.peak * D(100),
-            )
+            self.max_drawdown_pct = max(self.max_drawdown_pct, drawdown / self.peak * D(100))
         result = "WIN" if net > 0 else "LOSS" if net < 0 else "FLAT"
         self.trades.append(
             StreamTrade(
@@ -616,8 +705,8 @@ class CausalFrozenEngine:
                 strategy_name=self.spec.strategy_name,
                 opened_at=position.opened_at.isoformat(),
                 closed_at=candle.at.isoformat(),
-                direction="CALL / LONG" if position.direction > 0 else "PUT / SHORT",
-                entry_underlying=position.entry_price,
+                direction="CALL / LONG" if position.direction > 0 else ("PUT / LONG" if option_mode else "PUT / SHORT"),
+                entry_underlying=position.entry_underlying,
                 exit_underlying=candle.close,
                 gross_return_pct=gross,
                 net_return_pct=net,
@@ -630,6 +719,12 @@ class CausalFrozenEngine:
                 feature_scores=position.feature_scores,
                 exit_reason=reason,
                 result=result,
+                pricing_source="UPSTOX_EXPIRED_OPTION" if option_mode else "NIFTY_PROXY",
+                option_strike=position.option_strike,
+                option_type=position.option_type,
+                option_entry_price=position.entry_price if option_mode else None,
+                option_exit_price=None if option_exit is None else option_exit.close,
+                option_quantity=execution.quantity,
             )
         )
         self.equity_curve.append((candle.at.isoformat(), self.balance))
@@ -642,6 +737,20 @@ class CausalFrozenEngine:
             if candle.at < due:
                 remaining.append(pending)
                 continue
+            if self.config.execution_mode == "OPTION_PREMIUM":
+                self.rejected.append(
+                    StreamRejectedSignal(
+                        timeframe_minutes=self.spec.timeframe_minutes,
+                        engine_id=self.spec.engine_id,
+                        at=pending.at.isoformat(),
+                        direction="CALL / LONG" if pending.direction > 0 else "PUT / LONG",
+                        reason=pending.reason,
+                        hypothetical_return_pct=None,
+                        hypothetical_pnl=None,
+                        classification="UNEVALUATED_OPTION_REJECTION",
+                    )
+                )
+                continue
             execution = self.execution.evaluate(
                 entry_price=pending.entry_price,
                 exit_price=candle.close,
@@ -651,11 +760,7 @@ class CausalFrozenEngine:
             )
             net = execution.net_return_pct
             pnl = execution.paper_pnl
-            classification = (
-                "MISSED_WINNER" if net > 0
-                else "GOOD_REJECTION" if net < 0
-                else "NEUTRAL"
-            )
+            classification = "MISSED_WINNER" if net > 0 else "GOOD_REJECTION" if net < 0 else "NEUTRAL"
             self.rejected.append(
                 StreamRejectedSignal(
                     timeframe_minutes=self.spec.timeframe_minutes,
@@ -670,7 +775,6 @@ class CausalFrozenEngine:
             )
         self.pending_rejected = remaining
 
-
 def run_stream_engine(
     *,
     blind_candles: Sequence[Candle],
@@ -678,10 +782,16 @@ def run_stream_engine(
     spec: FrozenEngineSpec,
     config: ShadowReplayConfig,
     timeline: HistoricalFeatureTimeline | None = None,
+    option_datasets: Mapping[date, HistoricalOptionDataset] | None = None,
 ) -> StreamEngineReport:
     """Run one frozen engine over blind candles in strict timestamp order."""
 
-    engine = CausalFrozenEngine(spec, config, timeline=timeline)
+    engine = CausalFrozenEngine(
+        spec,
+        config,
+        timeline=timeline,
+        option_datasets=option_datasets,
+    )
     engine.seed(development_seed_candles)
     ordered = tuple(sorted(blind_candles, key=lambda item: item.at))
     previous_day = None

@@ -172,6 +172,20 @@ def _exact_one(items: list[Instrument], missing: str, ambiguous: str) -> Instrum
     return items[0]
 
 
+def resolve_nifty_spot(master: Sequence[Instrument]) -> Instrument:
+    """Resolve the canonical NIFTY 50 spot index instrument."""
+
+    return _exact_one(
+        [
+            item for item in master
+            if item.name == "NIFTY" and item.symbol.upper() == "NIFTY 50"
+            and item.exchange == "NSE" and item.instrument_type == "AMXIDX"
+        ],
+        "NIFTY spot missing",
+        "NIFTY spot ambiguous",
+    )
+
+
 def resolve_nifty_instruments(
     master: Sequence[Instrument],
     as_of: date,
@@ -182,15 +196,7 @@ def resolve_nifty_instruments(
 
     if not spot_ltp.is_finite() or spot_ltp <= 0 or strikes_each_side < 1:
         raise InstrumentError("instrument resolution input invalid")
-    spot = _exact_one(
-        [
-            item for item in master
-            if item.name == "NIFTY" and item.symbol.upper() == "NIFTY 50"
-            and item.exchange == "NSE" and item.instrument_type == "AMXIDX"
-        ],
-        "NIFTY spot missing",
-        "NIFTY spot ambiguous",
-    )
+    spot = resolve_nifty_spot(master)
     vix = _exact_one(
         [
             item for item in master

@@ -7,6 +7,7 @@ from intrader.instruments import (
     InstrumentError,
     fetch_instrument_master,
     resolve_nifty_instruments,
+    resolve_nifty_spot,
 )
 
 
@@ -124,3 +125,13 @@ def test_duplicate_nifty_spot_is_rejected() -> None:
 def test_non_list_master_is_rejected() -> None:
     with pytest.raises(InstrumentError, match="instrument master invalid"):
         fetch_instrument_master(FakeTransport({"status": "unexpected"}))
+
+
+def test_resolve_nifty_spot_without_current_derivatives() -> None:
+    rows = _master_rows()[:2]
+    master = fetch_instrument_master(FakeTransport(rows))
+
+    spot = resolve_nifty_spot(master)
+
+    assert spot.token == "99926000"
+    assert spot.symbol == "Nifty 50"

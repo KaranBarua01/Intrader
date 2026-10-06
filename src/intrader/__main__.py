@@ -24,6 +24,11 @@ from intrader.credentials import CredentialStore, SUPPORTED_CREDENTIALS, credent
 from intrader.doctor import run_doctor
 from intrader.feed_health import FeedHealth
 from intrader.historical import INDIA_TIME
+from intrader.expired_option_download import (
+    ExpiredOptionDownloadError,
+    download_expired_options_1m,
+)
+from intrader.instruments import fetch_instrument_master, resolve_nifty_spot
 from intrader.today_download import TodayDownloadError, download_today_1m
 from intrader.live_feed import LiveFeed
 from intrader.market_confirmation_pipeline import build_stored_market_confirmation
@@ -43,6 +48,7 @@ from intrader.session import (
     build_session_schedule,
 )
 from intrader.storage import MarketSnapshotSink, OptionSnapshotSink, SQLiteStore
+from intrader.upstox import UpstoxExpiredClient
 
 
 def _database_path() -> Path:
@@ -233,6 +239,48 @@ def main(argv: list[str] | None = None) -> int:
         print("HISTORICAL DOWNLOAD OK")
         print(f"Trading date: {report.trading_date}")
         print(f"Instruments: {len(report.instruments)}")
+        print(f"Rows: {report.total_rows}")
+        print(f"CSV: {report.csv_path}")
+        print(f"Manifest: {report.manifest_path}")
+        return 0
+
+    if argv and argv[0] == "download-expired-options":
+        if len(argv) != 2:
+            print("Usage: python -m intrader download-expired-options YYYY-MM-DD")
+            return 2
+        try:
+            trading_date = date.fromisoformat(argv[1])
+            credential_store = CredentialStore()
+            transport = RequestsTransport()
+            session = authenticate(credential_store, transport)
+            master = fetch_instrument_master(transport)
+            spot = resolve_nifty_spot(master)
+            upstox = UpstoxExpiredClient.from_secret_store(credential_store)
+            report = download_expired_options_1m(
+                session,
+                transport,
+                upstox,
+                spot,
+                trading_date,
+                output_root=Path.cwd() / "data" / "historical",
+            )
+        except (ValueError, ExpiredOptionDownloadError) as exc:
+            print("EXPIRED OPTION DOWNLOAD FAILED")
+            print(f"Reason: {exc}")
+            return 1
+        except Exception:
+            print("EXPIRED OPTION DOWNLOAD FAILED")
+            print("Reason: ACCESS_UNAVAILABLE")
+            return 1
+        print("EXPIRED OPTION DOWNLOAD OK")
+        print(f"Trading date: {report.trading_date}")
+        print(f"Expiry: {report.expiry}")
+        print(
+            "Spot range: "
+            f"{report.spot_low} - {report.spot_high}"
+        )
+        print(f"Strikes: {len(report.selected_strikes)}")
+        print(f"Contracts: {report.contract_count}")
         print(f"Rows: {report.total_rows}")
         print(f"CSV: {report.csv_path}")
         print(f"Manifest: {report.manifest_path}")
@@ -1039,7 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Usage: python -m intrader "
             "[doctor | init-storage | credentials set NAME | check-market-access | "
-            "check-live-feed SECONDS | download-today-1m | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
+            "check-live-feed SECONDS | download-today-1m | download-expired-options YYYY-MM-DD | backfill-session YYYY-MM-DD HH:MM YYYY-MM-DD HH:MM | "
             "session-plan YYYY-MM-DD | prepare-session YYYY-MM-DD | price-structure YYYY-MM-DD HH:MM | options-intelligence YYYY-MM-DD HH:MM | market-confirmation YYYY-MM-DD HH:MM | breadth YYYY-MM-DD HH:MM | context YYYY-MM-DD HH:MM | market-brain YYYY-MM-DD HH:MM | record-decision YYYY-MM-DD HH:MM | shadow-step YYYY-MM-DD HH:MM | settle-shadow TRADE_ID YYYY-MM-DD HH:MM | audit-shadow TRADE_ID | records-manager | calibrate-shadow | promotion-gate | desktop]"
         )
         return 2
